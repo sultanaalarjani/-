@@ -54,6 +54,40 @@ function fmtDate(iso: string) {
   }
 }
 
+function csvCell(v: string) {
+  const s = (v ?? "").toString();
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// يصدّر البيانات إلى ملف Excel (CSV) مع دعم العربية
+function exportEntriesToCsv(
+  entries: Entry[],
+  fields: FieldDef[],
+  withAuthor: boolean
+) {
+  const header = [
+    ...(withAuthor ? ["المُدخِل", "الإيميل"] : []),
+    ...fields.map((f) => f.label),
+    "تاريخ الإدخال",
+  ];
+  const rows = entries.map((e) => [
+    ...(withAuthor ? [e.authorName || "", e.authorEmail || ""] : []),
+    ...fields.map((f) => e.values[f.id] || ""),
+    fmtDate(e.createdAt),
+  ]);
+  const csv = [header, ...rows]
+    .map((r) => r.map(csvCell).join(","))
+    .join("\r\n");
+  // BOM ليفتح بالعربية الصحيحة في Excel
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `البيانات-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Dashboard({ me }: { me: Me }) {
   const router = useRouter();
   const isAdmin = me.role === "admin";
@@ -254,6 +288,8 @@ function EntriesTable({
   showAuthor: boolean;
   onChanged: () => void;
 }) {
+  const [editing, setEditing] = useState<Entry | null>(null);
+
   async function remove(id: string) {
     if (!confirm("هل تريد حذف هذا الإدخال؟")) return;
     await fetch(`/api/entries/${id}`, { method: "DELETE" });
@@ -265,43 +301,129 @@ function EntriesTable({
   }
 
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table>
-        <thead>
-          <tr>
-            {showAuthor && <th>المُدخِل</th>}
-            {fields.map((f) => (
-              <th key={f.id}>{f.label}</th>
-            ))}
-            <th>تاريخ الإدخال</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((e) => (
-            <tr key={e.id}>
-              {showAuthor && (
-                <td>
-                  <strong>{e.authorName}</strong>
-                  <br />
-                  <span className="muted" dir="ltr">
-                    {e.authorEmail}
-                  </span>
-                </td>
-              )}
+    <>
+      <div style={{ overflowX: "auto" }}>
+        <table>
+          <thead>
+            <tr>
+              {showAuthor && <th>المُدخِل</th>}
               {fields.map((f) => (
-                <td key={f.id}>{e.values[f.id] || "—"}</td>
+                <th key={f.id}>{f.label}</th>
               ))}
-              <td className="muted">{fmtDate(e.createdAt)}</td>
-              <td>
-                <button className="btn btn-danger btn-sm" onClick={() => remove(e.id)}>
-                  حذف
-                </button>
-              </td>
+              <th>تاريخ الإدخال</th>
+              <th></th>
             </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id}>
+                {showAuthor && (
+                  <td>
+                    <strong>{e.authorName}</strong>
+                    <br />
+                    <span className="muted" dir="ltr">
+                      {e.authorEmail}
+                    </span>
+                  </td>
+                )}
+                {fields.map((f) => (
+                  <td key={f.id}>{e.values[f.id] || "—"}</td>
+                ))}
+                <td className="muted">{fmtDate(e.createdAt)}</td>
+                <td>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setEditing(e)}
+                    >
+                      تعديل
+                    </button>
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() => remove(e.id)}
+                    >
+                      حذف
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {editing && (
+        <EditEntryModal
+          entry={editing}
+          fields={fields}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            onChanged();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function EditEntryModal({
+  entry,
+  fields,
+  onClose,
+  onSaved,
+}: {
+  entry: Entry;
+  fields: FieldDef[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({ ...entry.values });
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/entries/${entry.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      const data = await res.json();
+      if (!res.ok) setErr(data.error || "تعذّر الحفظ");
+      else onSaved();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+        <h3>تعديل الإدخال</h3>
+        {err && <div className="alert alert-error">{err}</div>}
+        <form onSubmit={save}>
+          {fields.map((f) => (
+            <FieldInput
+              key={f.id}
+              field={f}
+              value={values[f.id] || ""}
+              onChange={(v) => setValues((s) => ({ ...s, [f.id]: v }))}
+            />
           ))}
-        </tbody>
-      </table>
+          <div className="modal-actions">
+            <button className="btn" disabled={loading}>
+              {loading ? "جارٍ الحفظ..." : "حفظ التعديل"}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>
+              إلغاء
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -311,6 +433,7 @@ function AllData({ me }: { me: Me }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [fields, setFields] = useState<FieldDef[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authorFilter, setAuthorFilter] = useState("");
 
   const load = useCallback(async () => {
     const [er, fr] = await Promise.all([
@@ -331,20 +454,46 @@ function AllData({ me }: { me: Me }) {
 
   void me;
 
+  // قائمة المُدخِلين للفلترة
+  const authors = Array.from(
+    new Map(entries.map((e) => [e.userId, e.authorName || ""])).entries()
+  );
+  const filtered = authorFilter
+    ? entries.filter((e) => e.userId === authorFilter)
+    : entries;
+
   return (
     <div>
-      <div className="row" style={{ marginBottom: 16, alignItems: "center" }}>
-        <h2 className="section-title" style={{ margin: 0, flex: 1 }}>
-          كل البيانات المُدخَلة ({entries.length})
-        </h2>
-        <button className="btn btn-ghost btn-sm" style={{ flex: 0 }} onClick={load}>
+      <h2 className="section-title">كل البيانات المُدخَلة ({filtered.length})</h2>
+      <div className="toolbar">
+        <select
+          className="grow"
+          value={authorFilter}
+          onChange={(e) => setAuthorFilter(e.target.value)}
+          style={{ maxWidth: 240 }}
+        >
+          <option value="">كل المدراء</option>
+          {authors.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <button className="btn btn-ghost btn-sm" onClick={load}>
           تحديث
+        </button>
+        <button
+          className="btn btn-sm"
+          disabled={filtered.length === 0}
+          onClick={() => exportEntriesToCsv(filtered, fields, true)}
+        >
+          ⬇ تصدير Excel
         </button>
       </div>
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
       ) : (
-        <EntriesTable entries={entries} fields={fields} showAuthor onChanged={load} />
+        <EntriesTable entries={filtered} fields={fields} showAuthor onChanged={load} />
       )}
     </div>
   );
