@@ -1,97 +1,86 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { evaluate, fmtValue } from "@/lib/calc";
 
 type Role = "admin" | "manager";
+type Unit = "percent" | "number";
 
 interface Me {
   id: string;
   name: string;
   email: string;
   role: Role;
+  sectorIds: string[];
 }
-
-interface FieldDef {
+interface Sector {
   id: string;
-  label: string;
-  type: "text" | "number" | "date" | "textarea" | "select";
-  required: boolean;
-  options?: string[];
+  name: string;
   order: number;
 }
-
-interface Entry {
+interface Entity {
   id: string;
-  userId: string;
-  values: Record<string, string>;
-  createdAt: string;
-  updatedAt: string;
-  authorName?: string;
-  authorEmail?: string;
-}
-
-interface UserRow {
-  id: string;
-  email: string;
+  sectorId: string;
   name: string;
-  role: Role;
+  order: number;
+}
+interface Indicator {
+  id: string;
+  name: string;
+  unit: Unit;
   active: boolean;
-  createdAt: string;
+  order: number;
+}
+interface Period {
+  id: string;
+  label: string;
+  order: number;
+}
+interface Measurement {
+  id: string;
+  entityId: string;
+  indicatorId: string;
+  periodId: string;
+  target: number | null;
+  actual: number | null;
+  updatedAt: string;
+}
+interface RefData {
+  sectors: Sector[];
+  entities: Entity[];
+  indicators: Indicator[];
+  periods: Period[];
 }
 
-function fmtDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleString("ar", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function csvCell(v: string) {
-  const s = (v ?? "").toString();
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-// يصدّر البيانات إلى ملف Excel (CSV) مع دعم العربية
-function exportEntriesToCsv(
-  entries: Entry[],
-  fields: FieldDef[],
-  withAuthor: boolean
-) {
-  const header = [
-    ...(withAuthor ? ["المُدخِل", "الإيميل"] : []),
-    ...fields.map((f) => f.label),
-    "تاريخ الإدخال",
-  ];
-  const rows = entries.map((e) => [
-    ...(withAuthor ? [e.authorName || "", e.authorEmail || ""] : []),
-    ...fields.map((f) => e.values[f.id] || ""),
-    fmtDate(e.createdAt),
-  ]);
-  const csv = [header, ...rows]
-    .map((r) => r.map(csvCell).join(","))
-    .join("\r\n");
-  // BOM ليفتح بالعربية الصحيحة في Excel
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `البيانات-${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+const EMPTY_REF: RefData = { sectors: [], entities: [], indicators: [], periods: [] };
 
 export default function Dashboard({ me }: { me: Me }) {
   const router = useRouter();
   const isAdmin = me.role === "admin";
-  const [tab, setTab] = useState<string>(isAdmin ? "data" : "entry");
+  const [tab, setTab] = useState<string>("overview");
+  const [refData, setRef] = useState<RefData>(EMPTY_REF);
+  const [loaded, setLoaded] = useState(false);
+
+  const loadRef = useCallback(async () => {
+    const [s, e, i, p] = await Promise.all([
+      fetch("/api/sectors").then((r) => r.json()),
+      fetch("/api/entities").then((r) => r.json()),
+      fetch(`/api/indicators${isAdmin ? "?all=1" : ""}`).then((r) => r.json()),
+      fetch("/api/periods").then((r) => r.json()),
+    ]);
+    setRef({
+      sectors: s.sectors || [],
+      entities: e.entities || [],
+      indicators: i.indicators || [],
+      periods: p.periods || [],
+    });
+    setLoaded(true);
+  }, [isAdmin]);
+
+  useEffect(() => {
+    loadRef();
+  }, [loadRef]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -102,12 +91,12 @@ export default function Dashboard({ me }: { me: Me }) {
   return (
     <>
       <div className="topbar">
-        <div className="brand">لوحة تحكم الإدارة</div>
+        <div className="brand">إدارة عمليات الأداء</div>
         <div className="user">
           <span>
             {me.name}{" "}
             <span className={`badge ${isAdmin ? "badge-admin" : "badge-manager"}`}>
-              {isAdmin ? "مدير الإدارة" : "مدير"}
+              {isAdmin ? "مدير الإدارة" : "مدير قطاع"}
             </span>
           </span>
           <button className="btn btn-ghost btn-sm" onClick={logout}>
@@ -118,13 +107,25 @@ export default function Dashboard({ me }: { me: Me }) {
 
       <div className="container">
         <div className="tabs">
+          <button
+            className={`tab ${tab === "overview" ? "active" : ""}`}
+            onClick={() => setTab("overview")}
+          >
+            النظرة العامة
+          </button>
+          <button
+            className={`tab ${tab === "entry" ? "active" : ""}`}
+            onClick={() => setTab("entry")}
+          >
+            إدخال البيانات
+          </button>
           {isAdmin && (
             <>
               <button
-                className={`tab ${tab === "data" ? "active" : ""}`}
-                onClick={() => setTab("data")}
+                className={`tab ${tab === "structure" ? "active" : ""}`}
+                onClick={() => setTab("structure")}
               >
-                كل البيانات
+                الهيكل التنظيمي
               </button>
               <button
                 className={`tab ${tab === "users" ? "active" : ""}`}
@@ -132,418 +133,853 @@ export default function Dashboard({ me }: { me: Me }) {
               >
                 المدراء والصلاحيات
               </button>
-              <button
-                className={`tab ${tab === "fields" ? "active" : ""}`}
-                onClick={() => setTab("fields")}
-              >
-                إعداد الحقول
-              </button>
             </>
-          )}
-          <button
-            className={`tab ${tab === "entry" ? "active" : ""}`}
-            onClick={() => setTab("entry")}
-          >
-            إدخال بيانات
-          </button>
-          {!isAdmin && (
-            <button
-              className={`tab ${tab === "mine" ? "active" : ""}`}
-              onClick={() => setTab("mine")}
-            >
-              إدخالاتي
-            </button>
           )}
         </div>
 
-        {tab === "data" && isAdmin && <AllData me={me} />}
-        {tab === "users" && isAdmin && <UsersManager me={me} />}
-        {tab === "fields" && isAdmin && <FieldsManager />}
-        {tab === "entry" && <EntryForm onSaved={() => setTab(isAdmin ? "data" : "mine")} />}
-        {tab === "mine" && !isAdmin && <MyEntries me={me} />}
+        {!loaded ? (
+          <div className="empty">جارٍ التحميل...</div>
+        ) : (
+          <>
+            {tab === "overview" && <Overview me={me} refData={refData} />}
+            {tab === "entry" && <DataEntry me={me} refData={refData} />}
+            {tab === "structure" && isAdmin && (
+              <StructureManager refData={refData} reload={loadRef} />
+            )}
+            {tab === "users" && isAdmin && <UsersManager refData={refData} />}
+          </>
+        )}
       </div>
     </>
   );
 }
 
-/* ============ نموذج إدخال البيانات ============ */
-function EntryForm({ onSaved }: { onSaved: () => void }) {
-  const [fields, setFields] = useState<FieldDef[]>([]);
-  const [values, setValues] = useState<Record<string, string>>({});
+/* ============ أدوات مساعدة ============ */
+function visibleSectors(me: Me, refData: RefData): Sector[] {
+  if (me.role === "admin") return refData.sectors;
+  return refData.sectors.filter((s) => me.sectorIds.includes(s.id));
+}
+function activeIndicators(refData: RefData): Indicator[] {
+  return refData.indicators.filter((i) => i.active);
+}
+
+/* ============ النظرة العامة ============ */
+function Overview({ me, refData }: { me: Me; refData: RefData }) {
+  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    if (!periodId) {
+      setMeasurements([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const d = await fetch(`/api/measurements?periodId=${periodId}`).then((r) => r.json());
+    setMeasurements(d.measurements || []);
+    setLoading(false);
+  }, [periodId]);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 20000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const sectors = visibleSectors(me, refData);
+  const indicators = activeIndicators(refData);
+  const sectorIds = new Set(sectors.map((s) => s.id));
+  const entities = refData.entities.filter((e) => sectorIds.has(e.sectorId));
+
+  // خريطة القياسات: entityId|indicatorId -> measurement
+  const mMap = useMemo(() => {
+    const m = new Map<string, Measurement>();
+    for (const x of measurements) m.set(`${x.entityId}|${x.indicatorId}`, x);
+    return m;
+  }, [measurements]);
+
+  // ملخص: متوسط الإنجاز العام، عدد الخلايا المتعثرة
+  const summary = useMemo(() => {
+    let sum = 0;
+    let count = 0;
+    let weak = 0;
+    for (const m of measurements) {
+      const r = evaluate(m.actual, m.target);
+      if (r.achievement != null) {
+        sum += r.achievement;
+        count++;
+        if (r.status === "weak") weak++;
+      }
+    }
+    return {
+      avg: count ? Math.round(sum / count) : null,
+      measured: count,
+      weak,
+    };
+  }, [measurements]);
+
+  function exportCsv() {
+    const header = [
+      "القطاع",
+      "الجهة",
+      "المؤشر",
+      "الوحدة",
+      "المستهدف",
+      "المحقق",
+      "نسبة الإنجاز %",
+      "الحالة",
+    ];
+    const rows: string[][] = [];
+    for (const s of sectors) {
+      for (const e of entities.filter((x) => x.sectorId === s.id)) {
+        for (const ind of indicators) {
+          const m = mMap.get(`${e.id}|${ind.id}`);
+          const r = evaluate(m?.actual, m?.target);
+          rows.push([
+            s.name,
+            e.name,
+            ind.name,
+            ind.unit === "percent" ? "نسبة" : "عدد",
+            m?.target != null ? String(m.target) : "",
+            m?.actual != null ? String(m.actual) : "",
+            r.achievement != null ? String(Math.round(r.achievement)) : "",
+            r.label,
+          ]);
+        }
+      }
+    }
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(","))
+      .join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const plabel = refData.periods.find((p) => p.id === periodId)?.label || "";
+    a.download = `الأداء-${plabel}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (refData.periods.length === 0) {
+    return <div className="empty">لا توجد فترات. أضف فترة من تبويب الهيكل التنظيمي.</div>;
+  }
+
+  return (
+    <div>
+      <div className="toolbar">
+        <div>
+          <label style={{ marginBottom: 4 }}>الفترة</label>
+          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            {refData.periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: 1 }} />
+        <button className="btn btn-ghost btn-sm" onClick={load}>
+          تحديث
+        </button>
+        <button className="btn btn-sm" onClick={exportCsv}>
+          ⬇ تصدير Excel
+        </button>
+      </div>
+
+      {/* بطاقات الملخص */}
+      <div className="cards">
+        <StatCard label="متوسط الإنجاز العام" value={summary.avg != null ? `${summary.avg}%` : "—"} />
+        <StatCard label="عدد الجهات" value={String(entities.length)} />
+        <StatCard label="المؤشرات المقاسة" value={String(summary.measured)} />
+        <StatCard label="مؤشرات متعثرة" value={String(summary.weak)} danger={summary.weak > 0} />
+      </div>
+
+      {loading ? (
+        <div className="empty">جارٍ التحميل...</div>
+      ) : entities.length === 0 ? (
+        <div className="empty">لا توجد جهات بعد.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }} className="spacer-top">
+          <table className="matrix">
+            <thead>
+              <tr>
+                <th className="sticky-col">الجهة</th>
+                {indicators.map((ind, i) => (
+                  <th key={ind.id} title={ind.name}>
+                    م{i + 1}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sectors.map((s) => {
+                const sectorEntities = entities.filter((e) => e.sectorId === s.id);
+                if (sectorEntities.length === 0) return null;
+                return (
+                  <SectorRows
+                    key={s.id}
+                    sector={s}
+                    entities={sectorEntities}
+                    indicators={indicators}
+                    mMap={mMap}
+                  />
+                );
+              })}
+            </tbody>
+          </table>
+          <IndicatorLegend indicators={indicators} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  danger,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className="stat-card">
+      <div className="stat-value" style={danger ? { color: "var(--danger)" } : undefined}>
+        {value}
+      </div>
+      <div className="stat-label">{label}</div>
+    </div>
+  );
+}
+
+function SectorRows({
+  sector,
+  entities,
+  indicators,
+  mMap,
+}: {
+  sector: Sector;
+  entities: Entity[];
+  indicators: Indicator[];
+  mMap: Map<string, Measurement>;
+}) {
+  return (
+    <>
+      <tr className="sector-row">
+        <td className="sticky-col" colSpan={indicators.length + 1}>
+          {sector.name}
+        </td>
+      </tr>
+      {entities.map((e) => (
+        <tr key={e.id}>
+          <td className="sticky-col">{e.name}</td>
+          {indicators.map((ind) => {
+            const m = mMap.get(`${e.id}|${ind.id}`);
+            const r = evaluate(m?.actual, m?.target);
+            return (
+              <td
+                key={ind.id}
+                style={{ background: r.color, color: r.text, textAlign: "center" }}
+                title={`${ind.name}\nالمحقق: ${fmtValue(m?.actual, ind.unit)} | المستهدف: ${fmtValue(
+                  m?.target,
+                  ind.unit
+                )}`}
+              >
+                {r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
+              </td>
+            );
+          })}
+        </tr>
+      ))}
+    </>
+  );
+}
+
+function IndicatorLegend({ indicators }: { indicators: Indicator[] }) {
+  return (
+    <div className="legend">
+      <div className="legend-title">دليل المؤشرات:</div>
+      {indicators.map((ind, i) => (
+        <div key={ind.id} className="legend-item">
+          <strong>م{i + 1}:</strong> {ind.name}{" "}
+          <span className="muted">({ind.unit === "percent" ? "نسبة" : "عدد"})</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ============ إدخال البيانات ============ */
+function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
+  const sectors = visibleSectors(me, refData);
+  const indicators = activeIndicators(refData);
+  const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
+  const sectorEntities = refData.entities.filter((e) => e.sectorId === sectorId);
+  const [entityId, setEntityId] = useState("");
+  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // عند تغيير القطاع، اختر أول جهة
   useEffect(() => {
-    fetch("/api/fields")
-      .then((r) => r.json())
-      .then((d) => setFields(d.fields || []));
-  }, []);
+    const first = refData.entities.find((e) => e.sectorId === sectorId);
+    setEntityId(first?.id || "");
+  }, [sectorId, refData.entities]);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  // تحميل القياسات الحالية للجهة والفترة
+  const loadVals = useCallback(async () => {
+    if (!entityId || !periodId) {
+      setVals({});
+      return;
+    }
+    const d = await fetch(
+      `/api/measurements?entityId=${entityId}&periodId=${periodId}`
+    ).then((r) => r.json());
+    const map: Record<string, { target: string; actual: string }> = {};
+    for (const m of (d.measurements || []) as Measurement[]) {
+      map[m.indicatorId] = {
+        target: m.target != null ? String(m.target) : "",
+        actual: m.actual != null ? String(m.actual) : "",
+      };
+    }
+    setVals(map);
+  }, [entityId, periodId]);
+
+  useEffect(() => {
+    loadVals();
+  }, [loadVals]);
+
+  function setVal(indId: string, key: "target" | "actual", v: string) {
+    setVals((s) => ({ ...s, [indId]: { ...(s[indId] || { target: "", actual: "" }), [key]: v } }));
+  }
+
+  async function save() {
     setErr("");
     setMsg("");
     setLoading(true);
     try {
-      const res = await fetch("/api/entries", {
-        method: "POST",
+      const items = indicators.map((ind) => ({
+        entityId,
+        indicatorId: ind.id,
+        periodId,
+        target: vals[ind.id]?.target ?? "",
+        actual: vals[ind.id]?.actual ?? "",
+      }));
+      const res = await fetch("/api/measurements", {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ items }),
       });
       const data = await res.json();
-      if (!res.ok) setErr(data.error || "خطأ");
-      else {
-        setMsg("تم حفظ البيانات بنجاح ✓");
-        setValues({});
-        setTimeout(onSaved, 700);
-      }
+      if (!res.ok) setErr(data.error || "تعذّر الحفظ");
+      else setMsg("تم حفظ البيانات بنجاح ✓");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (sectors.length === 0) {
+    return (
+      <div className="empty">
+        لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.
+      </div>
+    );
+  }
+  if (refData.periods.length === 0) {
+    return <div className="empty">لا توجد فترات. أضف فترة من تبويب الهيكل التنظيمي.</div>;
   }
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال بيانات جديدة</h2>
+      <h2 className="section-title">إدخال قياسات الأداء</h2>
+      <div className="row" style={{ marginBottom: 18 }}>
+        <div>
+          <label>القطاع</label>
+          <select value={sectorId} onChange={(e) => setSectorId(e.target.value)}>
+            {sectors.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>الجهة</label>
+          <select value={entityId} onChange={(e) => setEntityId(e.target.value)}>
+            {sectorEntities.length === 0 && <option value="">لا توجد جهات</option>}
+            {sectorEntities.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>الفترة</label>
+          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            {refData.periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
-      {fields.length === 0 ? (
-        <p className="empty">لا توجد حقول معدّة بعد. تواصل مع مدير الإدارة.</p>
+
+      {!entityId ? (
+        <p className="empty">اختر جهة لإدخال بياناتها (أضف جهات من تبويب الهيكل).</p>
       ) : (
-        <form onSubmit={submit}>
-          {fields.map((f) => (
-            <FieldInput
-              key={f.id}
-              field={f}
-              value={values[f.id] || ""}
-              onChange={(v) => setValues((s) => ({ ...s, [f.id]: v }))}
-            />
-          ))}
-          <button className="btn" disabled={loading}>
-            {loading ? "جارٍ الحفظ..." : "حفظ البيانات"}
-          </button>
-        </form>
-      )}
-    </div>
-  );
-}
-
-function FieldInput({
-  field,
-  value,
-  onChange,
-}: {
-  field: FieldDef;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="field">
-      <label>
-        {field.label}
-        {field.required && <span style={{ color: "var(--danger)" }}> *</span>}
-      </label>
-      {field.type === "textarea" ? (
-        <textarea
-          rows={3}
-          value={value}
-          required={field.required}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      ) : field.type === "select" ? (
-        <select
-          value={value}
-          required={field.required}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">— اختر —</option>
-          {(field.options || []).map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <input
-          type={field.type}
-          value={value}
-          required={field.required}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-    </div>
-  );
-}
-
-/* ============ عرض البيانات (جدول) ============ */
-function EntriesTable({
-  entries,
-  fields,
-  showAuthor,
-  onChanged,
-}: {
-  entries: Entry[];
-  fields: FieldDef[];
-  showAuthor: boolean;
-  onChanged: () => void;
-}) {
-  const [editing, setEditing] = useState<Entry | null>(null);
-
-  async function remove(id: string) {
-    if (!confirm("هل تريد حذف هذا الإدخال؟")) return;
-    await fetch(`/api/entries/${id}`, { method: "DELETE" });
-    onChanged();
-  }
-
-  if (entries.length === 0) {
-    return <div className="empty">لا توجد بيانات بعد.</div>;
-  }
-
-  return (
-    <>
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <thead>
-            <tr>
-              {showAuthor && <th>المُدخِل</th>}
-              {fields.map((f) => (
-                <th key={f.id}>{f.label}</th>
-              ))}
-              <th>تاريخ الإدخال</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((e) => (
-              <tr key={e.id}>
-                {showAuthor && (
-                  <td>
-                    <strong>{e.authorName}</strong>
-                    <br />
-                    <span className="muted" dir="ltr">
-                      {e.authorEmail}
-                    </span>
-                  </td>
-                )}
-                {fields.map((f) => (
-                  <td key={f.id}>{e.values[f.id] || "—"}</td>
-                ))}
-                <td className="muted">{fmtDate(e.createdAt)}</td>
-                <td>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setEditing(e)}
-                    >
-                      تعديل
-                    </button>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      onClick={() => remove(e.id)}
-                    >
-                      حذف
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {editing && (
-        <EditEntryModal
-          entry={editing}
-          fields={fields}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            onChanged();
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function EditEntryModal({
-  entry,
-  fields,
-  onClose,
-  onSaved,
-}: {
-  entry: Entry;
-  fields: FieldDef[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [values, setValues] = useState<Record<string, string>>({ ...entry.values });
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setErr("");
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/entries/${entry.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values }),
-      });
-      const data = await res.json();
-      if (!res.ok) setErr(data.error || "تعذّر الحفظ");
-      else onSaved();
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(ev) => ev.stopPropagation()}>
-        <h3>تعديل الإدخال</h3>
-        {err && <div className="alert alert-error">{err}</div>}
-        <form onSubmit={save}>
-          {fields.map((f) => (
-            <FieldInput
-              key={f.id}
-              field={f}
-              value={values[f.id] || ""}
-              onChange={(v) => setValues((s) => ({ ...s, [f.id]: v }))}
-            />
-          ))}
-          <div className="modal-actions">
-            <button className="btn" disabled={loading}>
-              {loading ? "جارٍ الحفظ..." : "حفظ التعديل"}
-            </button>
-            <button type="button" className="btn btn-ghost" onClick={onClose}>
-              إلغاء
+        <>
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ minWidth: 280 }}>المؤشر</th>
+                  <th>المستهدف</th>
+                  <th>المحقق</th>
+                  <th>نسبة الإنجاز</th>
+                </tr>
+              </thead>
+              <tbody>
+                {indicators.map((ind, i) => {
+                  const tv = vals[ind.id]?.target ?? "";
+                  const av = vals[ind.id]?.actual ?? "";
+                  const r = evaluate(
+                    av === "" ? null : Number(av),
+                    tv === "" ? null : Number(tv)
+                  );
+                  return (
+                    <tr key={ind.id}>
+                      <td>
+                        <strong>م{i + 1}.</strong> {ind.name}{" "}
+                        <span className="muted">
+                          ({ind.unit === "percent" ? "%" : "عدد"})
+                        </span>
+                      </td>
+                      <td style={{ width: 110 }}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={tv}
+                          onChange={(e) => setVal(ind.id, "target", e.target.value)}
+                        />
+                      </td>
+                      <td style={{ width: 110 }}>
+                        <input
+                          type="number"
+                          step="any"
+                          value={av}
+                          onChange={(e) => setVal(ind.id, "actual", e.target.value)}
+                        />
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        <span
+                          className="badge"
+                          style={{ background: r.color, color: r.text }}
+                        >
+                          {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <button className="btn" onClick={save} disabled={loading}>
+              {loading ? "جارٍ الحفظ..." : "حفظ القياسات"}
             </button>
           </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-/* ============ كل البيانات (لمدير الإدارة) ============ */
-function AllData({ me }: { me: Me }) {
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [fields, setFields] = useState<FieldDef[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [authorFilter, setAuthorFilter] = useState("");
-
-  const load = useCallback(async () => {
-    const [er, fr] = await Promise.all([
-      fetch("/api/entries").then((r) => r.json()),
-      fetch("/api/fields").then((r) => r.json()),
-    ]);
-    setEntries(er.entries || []);
-    setFields(fr.fields || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-    // تحديث تلقائي كل 15 ثانية ليرى المدير العام أي بيانات جديدة
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
-  }, [load]);
-
-  void me;
-
-  // قائمة المُدخِلين للفلترة
-  const authors = Array.from(
-    new Map(entries.map((e) => [e.userId, e.authorName || ""])).entries()
-  );
-  const filtered = authorFilter
-    ? entries.filter((e) => e.userId === authorFilter)
-    : entries;
-
-  return (
-    <div>
-      <h2 className="section-title">كل البيانات المُدخَلة ({filtered.length})</h2>
-      <div className="toolbar">
-        <select
-          className="grow"
-          value={authorFilter}
-          onChange={(e) => setAuthorFilter(e.target.value)}
-          style={{ maxWidth: 240 }}
-        >
-          <option value="">كل المدراء</option>
-          {authors.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <button className="btn btn-ghost btn-sm" onClick={load}>
-          تحديث
-        </button>
-        <button
-          className="btn btn-sm"
-          disabled={filtered.length === 0}
-          onClick={() => exportEntriesToCsv(filtered, fields, true)}
-        >
-          ⬇ تصدير Excel
-        </button>
-      </div>
-      {loading ? (
-        <div className="empty">جارٍ التحميل...</div>
-      ) : (
-        <EntriesTable entries={filtered} fields={fields} showAuthor onChanged={load} />
+        </>
       )}
     </div>
   );
 }
 
-/* ============ إدخالاتي (للمدير) ============ */
-function MyEntries({ me }: { me: Me }) {
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [fields, setFields] = useState<FieldDef[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    const [er, fr] = await Promise.all([
-      fetch("/api/entries").then((r) => r.json()),
-      fetch("/api/fields").then((r) => r.json()),
-    ]);
-    setEntries(er.entries || []);
-    setFields(fr.fields || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  void me;
-
+/* ============ الهيكل التنظيمي (مدير الإدارة) ============ */
+function StructureManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [sub, setSub] = useState<"sectors" | "entities" | "indicators" | "periods">(
+    "sectors"
+  );
   return (
     <div>
-      <h2 className="section-title">إدخالاتي ({entries.length})</h2>
-      {loading ? (
-        <div className="empty">جارٍ التحميل...</div>
-      ) : (
-        <EntriesTable
-          entries={entries}
-          fields={fields}
-          showAuthor={false}
-          onChanged={load}
+      <div className="tabs" style={{ marginBottom: 16 }}>
+        <button className={`tab ${sub === "sectors" ? "active" : ""}`} onClick={() => setSub("sectors")}>
+          القطاعات
+        </button>
+        <button className={`tab ${sub === "entities" ? "active" : ""}`} onClick={() => setSub("entities")}>
+          الجهات
+        </button>
+        <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
+          المؤشرات
+        </button>
+        <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
+          الفترات
+        </button>
+      </div>
+      {sub === "sectors" && <SectorsManager refData={refData} reload={reload} />}
+      {sub === "entities" && <EntitiesManager refData={refData} reload={reload} />}
+      {sub === "indicators" && <IndicatorsManager refData={refData} reload={reload} />}
+      {sub === "periods" && <PeriodsManager refData={refData} reload={reload} />}
+    </div>
+  );
+}
+
+function SectorsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [name, setName] = useState("");
+  const [err, setErr] = useState("");
+  async function add() {
+    setErr("");
+    const res = await fetch("/api/sectors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const d = await res.json();
+    if (!res.ok) setErr(d.error || "خطأ");
+    else {
+      setName("");
+      reload();
+    }
+  }
+  async function rename(id: string, current: string) {
+    const v = prompt("اسم القطاع الجديد:", current);
+    if (v && v.trim()) {
+      await fetch(`/api/sectors/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: v }),
+      });
+      reload();
+    }
+  }
+  async function remove(id: string) {
+    if (!confirm("حذف القطاع سيحذف جهاته وقياساتها. متابعة؟")) return;
+    await fetch(`/api/sectors/${id}`, { method: "DELETE" });
+    reload();
+  }
+  return (
+    <div className="card">
+      <h2 className="section-title">القطاعات ({refData.sectors.length}/7)</h2>
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="row" style={{ marginBottom: 16 }}>
+        <input
+          placeholder="اسم القطاع"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
         />
-      )}
+        <div style={{ flex: "0 0 auto" }}>
+          <button className="btn" onClick={add} disabled={refData.sectors.length >= 7}>
+            إضافة قطاع
+          </button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>القطاع</th>
+            <th>عدد الجهات</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {refData.sectors.map((s) => (
+            <tr key={s.id}>
+              <td>{s.name}</td>
+              <td>{refData.entities.filter((e) => e.sectorId === s.id).length}</td>
+              <td>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => rename(s.id, s.name)}>
+                    تعديل
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => remove(s.id)}>
+                    حذف
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-/* ============ إدارة المدراء والصلاحيات ============ */
-function UsersManager({ me }: { me: Me }) {
+function EntitiesManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [sectorId, setSectorId] = useState(refData.sectors[0]?.id || "");
+  const [name, setName] = useState("");
+  const [err, setErr] = useState("");
+  async function add() {
+    setErr("");
+    const res = await fetch("/api/entities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sectorId, name }),
+    });
+    const d = await res.json();
+    if (!res.ok) setErr(d.error || "خطأ");
+    else {
+      setName("");
+      reload();
+    }
+  }
+  async function rename(id: string, current: string) {
+    const v = prompt("اسم الجهة الجديد:", current);
+    if (v && v.trim()) {
+      await fetch(`/api/entities/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: v }),
+      });
+      reload();
+    }
+  }
+  async function remove(id: string) {
+    if (!confirm("حذف الجهة سيحذف قياساتها. متابعة؟")) return;
+    await fetch(`/api/entities/${id}`, { method: "DELETE" });
+    reload();
+  }
+  const sectorName = (id: string) => refData.sectors.find((s) => s.id === id)?.name || "—";
+  return (
+    <div className="card">
+      <h2 className="section-title">الجهات ({refData.entities.length})</h2>
+      {err && <div className="alert alert-error">{err}</div>}
+      <div className="row" style={{ marginBottom: 16 }}>
+        <div>
+          <label>القطاع</label>
+          <select value={sectorId} onChange={(e) => setSectorId(e.target.value)}>
+            {refData.sectors.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>اسم الجهة</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div style={{ flex: "0 0 auto" }}>
+          <button className="btn" onClick={add} disabled={!sectorId}>
+            إضافة جهة
+          </button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>الجهة</th>
+            <th>القطاع</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {refData.entities.map((e) => (
+            <tr key={e.id}>
+              <td>{e.name}</td>
+              <td>{sectorName(e.sectorId)}</td>
+              <td>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => rename(e.id, e.name)}>
+                    تعديل
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => remove(e.id)}>
+                    حذف
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface EditableInd {
+  id: string;
+  name: string;
+  unit: Unit;
+  active: boolean;
+}
+function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [list, setList] = useState<EditableInd[]>(
+    refData.indicators.map((i) => ({ id: i.id, name: i.name, unit: i.unit, active: i.active }))
+  );
+  const [msg, setMsg] = useState("");
+
+  function upd(i: number, patch: Partial<EditableInd>) {
+    setList((s) => s.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  }
+  function addInd() {
+    setList((s) => [...s, { id: "", name: "", unit: "percent", active: true }]);
+  }
+  function removeInd(i: number) {
+    setList((s) => s.filter((_, idx) => idx !== i));
+  }
+  async function save() {
+    setMsg("");
+    const res = await fetch("/api/indicators", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ indicators: list.filter((x) => x.name.trim()) }),
+    });
+    if (res.ok) {
+      setMsg("تم حفظ المؤشرات ✓");
+      reload();
+    }
+  }
+  return (
+    <div className="card">
+      <h2 className="section-title">المؤشرات ({list.length})</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
+        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot;
+        للنسب المئوية.
+      </p>
+      {msg && <div className="alert alert-success">{msg}</div>}
+      {list.map((ind, i) => (
+        <div key={i} className="field-row">
+          <span className="muted" style={{ flex: "0 0 30px" }}>
+            م{i + 1}
+          </span>
+          <input
+            placeholder="اسم المؤشر"
+            value={ind.name}
+            onChange={(e) => upd(i, { name: e.target.value })}
+          />
+          <select
+            value={ind.unit}
+            onChange={(e) => upd(i, { unit: e.target.value as Unit })}
+            style={{ flex: "0 0 110px" }}
+          >
+            <option value="percent">نسبة %</option>
+            <option value="number">عدد</option>
+          </select>
+          <label className="checkbox-inline">
+            <input
+              type="checkbox"
+              checked={ind.active}
+              onChange={(e) => upd(i, { active: e.target.checked })}
+            />
+            مُفعّل
+          </label>
+          <button
+            className="btn btn-danger btn-sm"
+            style={{ flex: "0 0 auto" }}
+            onClick={() => removeInd(i)}
+          >
+            حذف
+          </button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+        <button className="btn btn-ghost" onClick={addInd}>
+          + إضافة مؤشر
+        </button>
+        <button className="btn" onClick={save}>
+          حفظ المؤشرات
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [label, setLabel] = useState("");
+  async function add() {
+    if (!label.trim()) return;
+    await fetch("/api/periods", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    setLabel("");
+    reload();
+  }
+  async function rename(id: string, current: string) {
+    const v = prompt("اسم الفترة الجديد:", current);
+    if (v && v.trim()) {
+      await fetch(`/api/periods/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: v }),
+      });
+      reload();
+    }
+  }
+  async function remove(id: string) {
+    if (!confirm("حذف الفترة سيحذف قياساتها. متابعة؟")) return;
+    await fetch(`/api/periods/${id}`, { method: "DELETE" });
+    reload();
+  }
+  return (
+    <div className="card">
+      <h2 className="section-title">الفترات ({refData.periods.length})</h2>
+      <div className="row" style={{ marginBottom: 16 }}>
+        <input
+          placeholder="مثال: الربع الأول 2026"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <div style={{ flex: "0 0 auto" }}>
+          <button className="btn" onClick={add}>
+            إضافة فترة
+          </button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>الفترة</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {refData.periods.map((p) => (
+            <tr key={p.id}>
+              <td>{p.label}</td>
+              <td>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => rename(p.id, p.label)}>
+                    تعديل
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => remove(p.id)}>
+                    حذف
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ============ المدراء والصلاحيات ============ */
+interface UserRow {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  active: boolean;
+  sectorIds: string[];
+}
+function UsersManager({ refData }: { refData: RefData }) {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("manager");
+  const [sectorIds, setSectorIds] = useState<string[]>([]);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -551,10 +987,13 @@ function UsersManager({ me }: { me: Me }) {
     const d = await fetch("/api/users").then((r) => r.json());
     setUsers(d.users || []);
   }, []);
-
   useEffect(() => {
     load();
   }, [load]);
+
+  function toggleSector(id: string) {
+    setSectorIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -563,43 +1002,65 @@ function UsersManager({ me }: { me: Me }) {
     const res = await fetch("/api/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, name, role }),
+      body: JSON.stringify({ email, name, role, sectorIds: role === "manager" ? sectorIds : [] }),
     });
-    const data = await res.json();
-    if (!res.ok) setErr(data.error || "خطأ");
+    const d = await res.json();
+    if (!res.ok) setErr(d.error || "خطأ");
     else {
-      setMsg(`تمت إضافة ${data.user.name} ✓`);
+      setMsg(`تمت إضافة ${d.user.name} ✓`);
       setEmail("");
       setName("");
       setRole("manager");
+      setSectorIds([]);
       load();
     }
   }
 
-  async function toggleActive(u: UserRow) {
-    await fetch(`/api/users/${u.id}`, {
+  async function patch(id: string, body: object) {
+    await fetch(`/api/users/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: !u.active }),
+      body: JSON.stringify(body),
     });
     load();
   }
-
   async function remove(u: UserRow) {
-    if (!confirm(`حذف ${u.name}؟ سيتم حذف بياناته أيضًا.`)) return;
+    if (!confirm(`حذف ${u.name}؟`)) return;
     const res = await fetch(`/api/users/${u.id}`, { method: "DELETE" });
-    const data = await res.json();
-    if (!res.ok) alert(data.error || "تعذّر الحذف");
+    const d = await res.json();
+    if (!res.ok) alert(d.error || "تعذّر الحذف");
     else load();
   }
+
+  async function editSectors(u: UserRow) {
+    const names = refData.sectors.map((s, i) => `${i + 1}) ${s.name}`).join("\n");
+    const input = prompt(
+      `أرقام القطاعات لـ ${u.name} (مفصولة بفاصلة):\n${names}`,
+      u.sectorIds
+        .map((id) => refData.sectors.findIndex((s) => s.id === id) + 1)
+        .filter((n) => n > 0)
+        .join(",")
+    );
+    if (input == null) return;
+    const idxs = input
+      .split(/[،,]/)
+      .map((x) => parseInt(x.trim(), 10) - 1)
+      .filter((n) => n >= 0 && n < refData.sectors.length);
+    const ids = idxs.map((n) => refData.sectors[n].id);
+    patch(u.id, { sectorIds: ids });
+  }
+
+  const sectorNames = (ids: string[]) =>
+    ids.map((id) => refData.sectors.find((s) => s.id === id)?.name).filter(Boolean).join("، ") ||
+    "—";
 
   return (
     <div>
       <div className="card" style={{ marginBottom: 24 }}>
-        <h2 className="section-title">إضافة مستخدم جديد</h2>
+        <h2 className="section-title">إضافة مستخدم</h2>
         <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-          أضف إيميل الدوام. المدير = صلاحية إدخال بيانات فقط. مدير الإدارة = صلاحيات
-          كاملة.
+          مدير القطاع = يدخل بيانات قطاعاته فقط. مدير الإدارة = صلاحيات كاملة على كل
+          القطاعات.
         </p>
         {err && <div className="alert alert-error">{err}</div>}
         {msg && <div className="alert alert-success">{msg}</div>}
@@ -620,17 +1081,34 @@ function UsersManager({ me }: { me: Me }) {
               <label>الاسم</label>
               <input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
-            <div style={{ flex: "0 0 160px" }}>
+            <div style={{ flex: "0 0 170px" }}>
               <label>الصلاحية</label>
               <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                <option value="manager">مدير (إدخال فقط)</option>
+                <option value="manager">مدير قطاع</option>
                 <option value="admin">مدير الإدارة</option>
               </select>
             </div>
-            <div style={{ flex: "0 0 auto" }}>
-              <button className="btn">إضافة</button>
-            </div>
           </div>
+          {role === "manager" && (
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>القطاعات المسؤول عنها</label>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {refData.sectors.map((s) => (
+                  <label key={s.id} className="checkbox-inline">
+                    <input
+                      type="checkbox"
+                      checked={sectorIds.includes(s.id)}
+                      onChange={() => toggleSector(s.id)}
+                    />
+                    {s.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <button className="btn" style={{ marginTop: 12 }}>
+            إضافة
+          </button>
         </form>
       </div>
 
@@ -641,6 +1119,7 @@ function UsersManager({ me }: { me: Me }) {
             <th>الاسم</th>
             <th>الإيميل</th>
             <th>الصلاحية</th>
+            <th>القطاعات</th>
             <th>الحالة</th>
             <th></th>
           </tr>
@@ -648,18 +1127,16 @@ function UsersManager({ me }: { me: Me }) {
         <tbody>
           {users.map((u) => (
             <tr key={u.id}>
-              <td>
-                {u.name}
-                {u.id === me.id && <span className="muted"> (أنت)</span>}
-              </td>
+              <td>{u.name}</td>
               <td dir="ltr" style={{ textAlign: "right" }}>
                 {u.email}
               </td>
               <td>
                 <span className={`badge ${u.role === "admin" ? "badge-admin" : "badge-manager"}`}>
-                  {u.role === "admin" ? "مدير الإدارة" : "مدير"}
+                  {u.role === "admin" ? "مدير الإدارة" : "مدير قطاع"}
                 </span>
               </td>
+              <td>{u.role === "manager" ? sectorNames(u.sectorIds) : "الكل"}</td>
               <td>
                 {u.active ? (
                   <span className="badge badge-manager">نشط</span>
@@ -668,165 +1145,27 @@ function UsersManager({ me }: { me: Me }) {
                 )}
               </td>
               <td>
-                {u.id !== me.id && (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button className="btn btn-ghost btn-sm" onClick={() => toggleActive(u)}>
-                      {u.active ? "إيقاف" : "تفعيل"}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {u.role === "manager" && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => editSectors(u)}>
+                      القطاعات
                     </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => remove(u)}>
-                      حذف
-                    </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => patch(u.id, { active: !u.active })}
+                  >
+                    {u.active ? "إيقاف" : "تفعيل"}
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => remove(u)}>
+                    حذف
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/* ============ إعداد الحقول ============ */
-interface EditableField {
-  id: string;
-  label: string;
-  type: FieldDef["type"];
-  required: boolean;
-  optionsText: string;
-}
-
-function FieldsManager() {
-  const [fields, setFields] = useState<EditableField[]>([]);
-  const [msg, setMsg] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/fields")
-      .then((r) => r.json())
-      .then((d) => {
-        setFields(
-          (d.fields || []).map((f: FieldDef) => ({
-            id: f.id,
-            label: f.label,
-            type: f.type,
-            required: f.required,
-            optionsText: (f.options || []).join("، "),
-          }))
-        );
-        setLoading(false);
-      });
-  }, []);
-
-  function update(i: number, patch: Partial<EditableField>) {
-    setFields((s) => s.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
-  }
-  function addField() {
-    setFields((s) => [
-      ...s,
-      { id: "", label: "", type: "text", required: false, optionsText: "" },
-    ]);
-  }
-  function removeField(i: number) {
-    setFields((s) => s.filter((_, idx) => idx !== i));
-  }
-
-  async function save() {
-    setMsg("");
-    const payload = fields
-      .filter((f) => f.label.trim())
-      .map((f) => ({
-        id: f.id,
-        label: f.label.trim(),
-        type: f.type,
-        required: f.required,
-        options:
-          f.type === "select"
-            ? f.optionsText
-                .split(/[،,]/)
-                .map((o) => o.trim())
-                .filter(Boolean)
-            : undefined,
-      }));
-    const res = await fetch("/api/fields", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields: payload }),
-    });
-    if (res.ok) setMsg("تم حفظ الحقول ✓");
-  }
-
-  if (loading) return <div className="empty">جارٍ التحميل...</div>;
-
-  return (
-    <div className="card">
-      <h2 className="section-title">إعداد الحقول التي يعبّيها المدراء</h2>
-      <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        أضف أو احذف أو عدّل الحقول. لنوع &quot;قائمة&quot; اكتب الخيارات مفصولة بفاصلة.
-      </p>
-      {msg && <div className="alert alert-success">{msg}</div>}
-
-      {fields.map((f, i) => (
-        <div
-          key={i}
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: 12,
-            padding: 12,
-            marginBottom: 12,
-          }}
-        >
-          <div className="field-row">
-            <input
-              placeholder="اسم الحقل"
-              value={f.label}
-              onChange={(e) => update(i, { label: e.target.value })}
-            />
-            <select
-              value={f.type}
-              onChange={(e) => update(i, { type: e.target.value as FieldDef["type"] })}
-              style={{ flex: "0 0 150px" }}
-            >
-              <option value="text">نص</option>
-              <option value="textarea">نص طويل</option>
-              <option value="number">رقم</option>
-              <option value="date">تاريخ</option>
-              <option value="select">قائمة</option>
-            </select>
-            <label className="checkbox-inline">
-              <input
-                type="checkbox"
-                checked={f.required}
-                onChange={(e) => update(i, { required: e.target.checked })}
-              />
-              إلزامي
-            </label>
-            <button
-              className="btn btn-danger btn-sm"
-              style={{ flex: "0 0 auto" }}
-              onClick={() => removeField(i)}
-            >
-              حذف
-            </button>
-          </div>
-          {f.type === "select" && (
-            <input
-              placeholder="الخيارات مفصولة بفاصلة، مثال: جديد، قيد التنفيذ، مكتمل"
-              value={f.optionsText}
-              onChange={(e) => update(i, { optionsText: e.target.value })}
-            />
-          )}
-        </div>
-      ))}
-
-      <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-        <button className="btn btn-ghost" onClick={addField}>
-          + إضافة حقل
-        </button>
-        <button className="btn" onClick={save}>
-          حفظ الحقول
-        </button>
-      </div>
     </div>
   );
 }

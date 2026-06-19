@@ -12,6 +12,8 @@ export interface User {
   role: Role;
   active: boolean;
   createdAt: string;
+  // القطاعات التي يديرها المدير (للمدراء فقط). مدير الإدارة يرى كل القطاعات.
+  sectorIds: string[];
 }
 
 export interface Otp {
@@ -26,22 +28,43 @@ export interface Session {
   expiresAt: number;
 }
 
-export type FieldType = "text" | "number" | "date" | "textarea" | "select";
-
-export interface FieldDef {
+export interface Sector {
   id: string;
-  label: string;
-  type: FieldType;
-  required: boolean;
-  options?: string[]; // للقوائم المنسدلة
+  name: string;
   order: number;
 }
 
-export interface Entry {
+export interface Entity {
   id: string;
-  userId: string;
-  values: Record<string, string>;
-  createdAt: string;
+  sectorId: string;
+  name: string;
+  order: number;
+}
+
+export type IndicatorUnit = "percent" | "number";
+
+export interface Indicator {
+  id: string;
+  name: string;
+  unit: IndicatorUnit;
+  active: boolean;
+  order: number;
+}
+
+export interface Period {
+  id: string;
+  label: string;
+  order: number;
+}
+
+export interface Measurement {
+  id: string;
+  entityId: string;
+  indicatorId: string;
+  periodId: string;
+  target: number | null;
+  actual: number | null;
+  updatedBy: string;
   updatedAt: string;
 }
 
@@ -49,15 +72,27 @@ interface DBShape {
   users: User[];
   otps: Otp[];
   sessions: Session[];
-  fields: FieldDef[];
-  entries: Entry[];
+  sectors: Sector[];
+  entities: Entity[];
+  indicators: Indicator[];
+  periods: Period[];
+  measurements: Measurement[];
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
 function defaultDB(): DBShape {
-  return { users: [], otps: [], sessions: [], fields: [], entries: [] };
+  return {
+    users: [],
+    otps: [],
+    sessions: [],
+    sectors: [],
+    entities: [],
+    indicators: [],
+    periods: [],
+    measurements: [],
+  };
 }
 
 export function newId(): string {
@@ -89,13 +124,43 @@ function save(db: DBShape) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-// ===== التهيئة: إنشاء مدير الإدارة الأول والحقول الافتراضية =====
+// ===== المؤشرات التسعة الافتراضية =====
+const DEFAULT_INDICATORS: { name: string; unit: IndicatorUnit }[] = [
+  { name: "نسبة الأجهزة العامة التي يتم قياس خدماتها", unit: "percent" },
+  { name: "نسبة الأجهزة ذات الأداء المنخفض التي تم عقد جلسات مراجعة لها", unit: "percent" },
+  { name: "نسبة التقارير الممتثلة لمعايير جودة ملاحظات الأداء", unit: "percent" },
+  { name: "نسبة قابلية قياس مؤشرات المخرجات الوطنية", unit: "percent" },
+  { name: "نسبة قابلية قياس الاستراتيجيات الوطنية المعتمدة من مجلس الوزراء", unit: "percent" },
+  { name: "عدد الأجهزة العامة التي تم قياس استراتيجياتها المؤسسية", unit: "number" },
+  { name: "نسبة التكليفات المباشرة المكتملة أو على المسار", unit: "percent" },
+  {
+    name: "نسبة وجودة وفعالية معالجة طلبات التغيير وتحديث سير التقدم للمؤشرات والمبادرات",
+    unit: "percent",
+  },
+  { name: "نسبة إتمام الخطة الفردية للاحتياج التطويري", unit: "percent" },
+];
+
+const DEFAULT_SECTORS = [
+  "قطاع البنية التحتية",
+  "قطاع الخدمات الاجتماعية",
+  "قطاع المالي والاقتصادي",
+  "قطاع الشؤون الحكومية",
+];
+
+const DEFAULT_PERIODS = [
+  "الربع الأول 2026",
+  "الربع الثاني 2026",
+  "الربع الثالث 2026",
+  "الربع الرابع 2026",
+];
+
+// ===== التهيئة =====
 let seeded = false;
 function seed(db: DBShape): DBShape {
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com")
     .trim()
     .toLowerCase();
-  const adminName = process.env.ADMIN_NAME || "مدير الإدارة";
+  const adminName = process.env.ADMIN_NAME || "مدير إدارة عمليات الأداء";
 
   if (!db.users.some((u) => u.email === adminEmail)) {
     db.users.push({
@@ -105,25 +170,40 @@ function seed(db: DBShape): DBShape {
       role: "admin",
       active: true,
       createdAt: new Date().toISOString(),
+      sectorIds: [],
     });
   }
+  // ضمان وجود sectorIds للمستخدمين القدامى
+  db.users.forEach((u) => {
+    if (!Array.isArray(u.sectorIds)) u.sectorIds = [];
+  });
 
-  // حقول افتراضية قابلة للتعديل من اللوحة
-  if (db.fields.length === 0) {
-    db.fields = [
-      { id: newId(), label: "العنوان", type: "text", required: true, order: 1 },
-      { id: newId(), label: "التفاصيل", type: "textarea", required: false, order: 2 },
-      {
-        id: newId(),
-        label: "الحالة",
-        type: "select",
-        required: false,
-        options: ["جديد", "قيد التنفيذ", "مكتمل"],
-        order: 3,
-      },
-      { id: newId(), label: "التاريخ", type: "date", required: false, order: 4 },
-    ];
+  if (db.sectors.length === 0) {
+    db.sectors = DEFAULT_SECTORS.map((name, i) => ({
+      id: newId(),
+      name,
+      order: i + 1,
+    }));
   }
+
+  if (db.indicators.length === 0) {
+    db.indicators = DEFAULT_INDICATORS.map((ind, i) => ({
+      id: newId(),
+      name: ind.name,
+      unit: ind.unit,
+      active: true,
+      order: i + 1,
+    }));
+  }
+
+  if (db.periods.length === 0) {
+    db.periods = DEFAULT_PERIODS.map((label, i) => ({
+      id: newId(),
+      label,
+      order: i + 1,
+    }));
+  }
+
   return db;
 }
 
@@ -154,6 +234,7 @@ export function createUser(input: {
   email: string;
   name: string;
   role: Role;
+  sectorIds?: string[];
 }): User {
   const db = getDB();
   const email = input.email.trim().toLowerCase();
@@ -167,25 +248,29 @@ export function createUser(input: {
     role: input.role,
     active: true,
     createdAt: new Date().toISOString(),
+    sectorIds: input.role === "manager" ? input.sectorIds || [] : [],
   };
   db.users.push(user);
   save(db);
   return user;
 }
 
-export function setUserActive(id: string, active: boolean) {
+export function updateUser(
+  id: string,
+  patch: { active?: boolean; sectorIds?: string[]; name?: string }
+) {
   const db = getDB();
   const u = db.users.find((x) => x.id === id);
-  if (u) {
-    u.active = active;
-    save(db);
-  }
+  if (!u) return;
+  if (typeof patch.active === "boolean") u.active = patch.active;
+  if (Array.isArray(patch.sectorIds)) u.sectorIds = patch.sectorIds;
+  if (typeof patch.name === "string" && patch.name.trim()) u.name = patch.name.trim();
+  save(db);
 }
 
 export function deleteUser(id: string) {
   const db = getDB();
   db.users = db.users.filter((u) => u.id !== id);
-  db.entries = db.entries.filter((e) => e.userId !== id);
   save(db);
 }
 
@@ -236,67 +321,207 @@ export function destroySession(token: string | undefined) {
   save(db);
 }
 
-// ===== الحقول =====
-export function listFields(): FieldDef[] {
-  return getDB().fields.sort((a, b) => a.order - b.order);
+// ===== القطاعات =====
+const MAX_SECTORS = 7;
+
+export function listSectors(): Sector[] {
+  return getDB().sectors.sort((a, b) => a.order - b.order);
 }
 
-export type FieldInput = {
+export function createSector(name: string): Sector {
+  const db = getDB();
+  if (db.sectors.length >= MAX_SECTORS) {
+    throw new Error(`الحد الأقصى ${MAX_SECTORS} قطاعات`);
+  }
+  const sector: Sector = {
+    id: newId(),
+    name: name.trim(),
+    order: db.sectors.length + 1,
+  };
+  db.sectors.push(sector);
+  save(db);
+  return sector;
+}
+
+export function updateSector(id: string, name: string) {
+  const db = getDB();
+  const s = db.sectors.find((x) => x.id === id);
+  if (s && name.trim()) {
+    s.name = name.trim();
+    save(db);
+  }
+}
+
+export function deleteSector(id: string) {
+  const db = getDB();
+  const entityIds = db.entities.filter((e) => e.sectorId === id).map((e) => e.id);
+  db.entities = db.entities.filter((e) => e.sectorId !== id);
+  db.measurements = db.measurements.filter((m) => !entityIds.includes(m.entityId));
+  db.sectors = db.sectors.filter((s) => s.id !== id);
+  db.users.forEach((u) => {
+    u.sectorIds = (u.sectorIds || []).filter((sid) => sid !== id);
+  });
+  save(db);
+}
+
+// ===== الجهات =====
+export function listEntities(): Entity[] {
+  return getDB().entities.sort((a, b) => a.order - b.order);
+}
+
+export function listEntitiesBySector(sectorId: string): Entity[] {
+  return listEntities().filter((e) => e.sectorId === sectorId);
+}
+
+export function getEntity(id: string): Entity | undefined {
+  return getDB().entities.find((e) => e.id === id);
+}
+
+export function createEntity(sectorId: string, name: string): Entity {
+  const db = getDB();
+  if (!db.sectors.some((s) => s.id === sectorId)) {
+    throw new Error("القطاع غير موجود");
+  }
+  const entity: Entity = {
+    id: newId(),
+    sectorId,
+    name: name.trim(),
+    order: db.entities.length + 1,
+  };
+  db.entities.push(entity);
+  save(db);
+  return entity;
+}
+
+export function updateEntity(id: string, patch: { name?: string; sectorId?: string }) {
+  const db = getDB();
+  const e = db.entities.find((x) => x.id === id);
+  if (!e) return;
+  if (patch.name && patch.name.trim()) e.name = patch.name.trim();
+  if (patch.sectorId && db.sectors.some((s) => s.id === patch.sectorId)) {
+    e.sectorId = patch.sectorId;
+  }
+  save(db);
+}
+
+export function deleteEntity(id: string) {
+  const db = getDB();
+  db.entities = db.entities.filter((e) => e.id !== id);
+  db.measurements = db.measurements.filter((m) => m.entityId !== id);
+  save(db);
+}
+
+// ===== المؤشرات =====
+export type IndicatorInput = {
   id?: string;
-  label: string;
-  type: FieldType;
-  required: boolean;
-  options?: string[];
+  name: string;
+  unit: IndicatorUnit;
+  active: boolean;
 };
 
-export function saveFields(fields: FieldInput[]): FieldDef[] {
+export function listIndicators(includeInactive = false): Indicator[] {
+  const all = getDB().indicators.sort((a, b) => a.order - b.order);
+  return includeInactive ? all : all.filter((i) => i.active);
+}
+
+export function saveIndicators(items: IndicatorInput[]): Indicator[] {
   const db = getDB();
-  db.fields = fields.map((f, i) => ({
-    id: f.id || newId(),
-    label: f.label,
-    type: f.type,
-    required: !!f.required,
-    options: f.options,
-    order: i + 1,
-  }));
+  db.indicators = items
+    .filter((i) => i.name.trim())
+    .map((i, idx) => ({
+      id: i.id || newId(),
+      name: i.name.trim(),
+      unit: i.unit === "number" ? "number" : "percent",
+      active: i.active !== false,
+      order: idx + 1,
+    }));
+  // إزالة قياسات المؤشرات المحذوفة
+  const ids = new Set(db.indicators.map((i) => i.id));
+  db.measurements = db.measurements.filter((m) => ids.has(m.indicatorId));
   save(db);
-  return db.fields;
+  return db.indicators;
 }
 
-// ===== البيانات (الإدخالات) =====
-export function listEntries(): Entry[] {
-  return getDB().entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+// ===== الفترات =====
+export function listPeriods(): Period[] {
+  return getDB().periods.sort((a, b) => a.order - b.order);
 }
 
-export function listEntriesByUser(userId: string): Entry[] {
-  return listEntries().filter((e) => e.userId === userId);
-}
-
-export function getEntry(id: string): Entry | undefined {
-  return getDB().entries.find((e) => e.id === id);
-}
-
-export function createEntry(userId: string, values: Record<string, string>): Entry {
+export function createPeriod(label: string): Period {
   const db = getDB();
-  const now = new Date().toISOString();
-  const entry: Entry = { id: newId(), userId, values, createdAt: now, updatedAt: now };
-  db.entries.push(entry);
+  const period: Period = {
+    id: newId(),
+    label: label.trim(),
+    order: db.periods.length + 1,
+  };
+  db.periods.push(period);
   save(db);
-  return entry;
+  return period;
 }
 
-export function updateEntry(id: string, values: Record<string, string>): Entry | undefined {
+export function updatePeriod(id: string, label: string) {
   const db = getDB();
-  const e = db.entries.find((x) => x.id === id);
-  if (!e) return undefined;
-  e.values = values;
-  e.updatedAt = new Date().toISOString();
-  save(db);
-  return e;
+  const p = db.periods.find((x) => x.id === id);
+  if (p && label.trim()) {
+    p.label = label.trim();
+    save(db);
+  }
 }
 
-export function deleteEntry(id: string) {
+export function deletePeriod(id: string) {
   const db = getDB();
-  db.entries = db.entries.filter((e) => e.id !== id);
+  db.periods = db.periods.filter((p) => p.id !== id);
+  db.measurements = db.measurements.filter((m) => m.periodId !== id);
   save(db);
+}
+
+// ===== القياسات =====
+export function listMeasurements(filter?: {
+  entityId?: string;
+  periodId?: string;
+  entityIds?: string[];
+}): Measurement[] {
+  let list = getDB().measurements;
+  if (filter?.entityId) list = list.filter((m) => m.entityId === filter.entityId);
+  if (filter?.periodId) list = list.filter((m) => m.periodId === filter.periodId);
+  if (filter?.entityIds) list = list.filter((m) => filter.entityIds!.includes(m.entityId));
+  return list;
+}
+
+// حفظ/تحديث قياس واحد لكل (جهة، مؤشر، فترة)
+export function upsertMeasurement(input: {
+  entityId: string;
+  indicatorId: string;
+  periodId: string;
+  target: number | null;
+  actual: number | null;
+  updatedBy: string;
+}): Measurement {
+  const db = getDB();
+  let m = db.measurements.find(
+    (x) =>
+      x.entityId === input.entityId &&
+      x.indicatorId === input.indicatorId &&
+      x.periodId === input.periodId
+  );
+  if (m) {
+    m.target = input.target;
+    m.actual = input.actual;
+    m.updatedBy = input.updatedBy;
+    m.updatedAt = new Date().toISOString();
+  } else {
+    m = {
+      id: newId(),
+      entityId: input.entityId,
+      indicatorId: input.indicatorId,
+      periodId: input.periodId,
+      target: input.target,
+      actual: input.actual,
+      updatedBy: input.updatedBy,
+      updatedAt: new Date().toISOString(),
+    };
+    db.measurements.push(m);
+  }
+  save(db);
+  return m;
 }

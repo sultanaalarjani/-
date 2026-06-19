@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   if (!user || user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  const { email, name, role } = await req.json().catch(() => ({}));
+  const { email, name, role, sectorIds } = await req.json().catch(() => ({}));
   if (!email || !String(email).includes("@")) {
     return NextResponse.json({ error: "أدخل إيميل صحيح" }, { status: 400 });
   }
@@ -24,6 +24,7 @@ export async function POST(req: Request) {
       email,
       name: name || "",
       role: role === "admin" ? "admin" : "manager",
+      sectorIds: Array.isArray(sectorIds) ? sectorIds : [],
     });
     return NextResponse.json({ ok: true, user: created });
   } catch (e) {

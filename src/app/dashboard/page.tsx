@@ -8,7 +8,13 @@ export default async function DashboardPage() {
 
   return (
     <Dashboard
-      me={{ id: user.id, name: user.name, email: user.email, role: user.role }}
+      me={{
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        sectorIds: user.sectorIds || [],
+      }}
     />
   );
 }

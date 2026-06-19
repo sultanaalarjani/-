@@ -345,3 +345,72 @@ tr:last-child td {
   flex: 1;
   min-width: 120px;
 }
+
+/* ===== بطاقات الملخص ===== */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.stat-card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.stat-value {
+  font-size: 30px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.stat-label {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* ===== مصفوفة الأداء ===== */
+.spacer-top {
+  margin-top: 8px;
+}
+table.matrix th,
+table.matrix td {
+  white-space: nowrap;
+}
+table.matrix th {
+  text-align: center;
+}
+.sticky-col {
+  position: sticky;
+  right: 0;
+  background: #f8fafc;
+  text-align: right !important;
+  font-weight: 600;
+  z-index: 1;
+}
+tr.sector-row td {
+  background: #1f2a44 !important;
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+/* ===== دليل المؤشرات ===== */
+.legend {
+  margin-top: 18px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+.legend-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.legend-item {
+  font-size: 13px;
+  color: var(--text);
+  padding: 2px 0;
+}

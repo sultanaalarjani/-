@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { deleteUser, getUserById, updateUser } from "@/lib/db";
+import { deletePeriod, updatePeriod } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -8,12 +8,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
   const { id } = await ctx.params;
-  const { active, sectorIds, name } = await req.json().catch(() => ({}));
-  updateUser(id, {
-    active: typeof active === "boolean" ? active : undefined,
-    sectorIds: Array.isArray(sectorIds) ? sectorIds : undefined,
-    name: typeof name === "string" ? name : undefined,
-  });
+  const { label } = await req.json().catch(() => ({}));
+  if (!label || !String(label).trim()) {
+    return NextResponse.json({ error: "أدخل اسم الفترة" }, { status: 400 });
+  }
+  updatePeriod(id, String(label));
   return NextResponse.json({ ok: true });
 }
 
@@ -23,15 +22,6 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
   const { id } = await ctx.params;
-  if (id === user.id) {
-    return NextResponse.json(
-      { error: "لا يمكنك حذف حسابك الخاص" },
-      { status: 400 }
-    );
-  }
-  if (!getUserById(id)) {
-    return NextResponse.json({ error: "المستخدم غير موجود" }, { status: 404 });
-  }
-  deleteUser(id);
+  deletePeriod(id);
   return NextResponse.json({ ok: true });
 }
