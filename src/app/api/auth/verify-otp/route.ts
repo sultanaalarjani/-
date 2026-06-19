@@ -23,7 +23,9 @@ export async function POST(req: Request) {
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // كوكي آمن فقط عند استخدام HTTPS. للتشغيل الداخلي عبر HTTP يبقى معطّلًا.
+    // فعّله بوضع COOKIE_SECURE=true في ملف .env إذا ربطت النظام بـ HTTPS.
+    secure: process.env.COOKIE_SECURE === "true",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
   });

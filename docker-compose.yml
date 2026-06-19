@@ -1,0 +1,26 @@
+services:
+  dashboard:
+    build: .
+    container_name: admin-dashboard
+    restart: unless-stopped
+    ports:
+      # المنفذ 3000 على الجهاز -> التطبيق. غيّر الرقم الأيسر لو تبي منفذًا آخر.
+      - "3000:3000"
+    environment:
+      # إيميل مدير الإدارة الأول (يُنشأ تلقائيًا عند أول تشغيل)
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_NAME: ${ADMIN_NAME:-مدير الإدارة}
+      # فعّله true فقط إذا ربطت النظام بـ HTTPS
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # إعدادات إرسال رمز الدخول بالبريد (اتركها فارغة لوضع التجربة)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      # حفظ البيانات على قرص دائم حتى لا تضيع عند إعادة التشغيل
+      - dashboard_data:/app/data
+
+volumes:
+  dashboard_data:
