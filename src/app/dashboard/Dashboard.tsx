@@ -3,6 +3,53 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { evaluate, fmtValue, perfStatus } from "@/lib/calc";
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  Radar,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  LineChart,
+  Line,
+  RadialBarChart,
+  RadialBar,
+} from "recharts";
+
+const CHART = {
+  grid: "rgba(255,255,255,0.08)",
+  axis: "#93a7c9",
+  excellent: "#22c55e",
+  good: "#f59e0b",
+  weak: "#ef4444",
+  none: "#475569",
+  cyan: "#22d3ee",
+  blue: "#3b82f6",
+  series: ["#22d3ee", "#3b82f6", "#a855f7", "#22c55e", "#f59e0b", "#ec4899", "#14b8a6"],
+};
+function statusColor(s: string) {
+  return s === "excellent"
+    ? CHART.excellent
+    : s === "good"
+    ? CHART.good
+    : s === "weak"
+    ? CHART.weak
+    : CHART.none;
+}
+const tooltipStyle = {
+  background: "#101e3a",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 10,
+  color: "#e8eefc",
+};
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -186,48 +233,95 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     return () => clearInterval(t);
   }, [load]);
 
-  // خريطة: قطاع|مؤشر|ربع -> قياس
   const mMap = useMemo(() => {
     const m = new Map<string, Measurement>();
     for (const x of measurements) m.set(mkey(x.sectorId, x.indicatorId, x.periodId), x);
     return m;
   }, [measurements]);
 
-  // نسبة كل مؤشر (متوسط القطاعات) للفترة المختارة
-  function indicatorAchievement(indId: string): number | null {
-    const vals: number[] = [];
-    for (const s of sectors) {
-      const m = mMap.get(mkey(s.id, indId, periodId));
-      const r = evaluate(m?.actual, m?.target);
-      if (r.achievement != null) vals.push(r.achievement);
-    }
-    if (vals.length === 0) return null;
-    return vals.reduce((a, b) => a + b, 0) / vals.length;
-  }
+  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  const achOf = useCallback(
+    (sectorId: string, indId: string, pId: string): number | null => {
+      const m = mMap.get(mkey(sectorId, indId, pId));
+      return evaluate(m?.actual, m?.target).achievement;
+    },
+    [mMap]
+  );
 
-  // نسبة القطاع (متوسط مؤشراته) للفترة المختارة
-  function sectorAchievement(sectorId: string): number | null {
-    const vals: number[] = [];
-    for (const ind of indicators) {
-      const m = mMap.get(mkey(sectorId, ind.id, periodId));
-      const r = evaluate(m?.actual, m?.target);
-      if (r.achievement != null) vals.push(r.achievement);
-    }
-    if (vals.length === 0) return null;
-    return vals.reduce((a, b) => a + b, 0) / vals.length;
-  }
+  // بيانات الرسوم للفترة المختارة
+  const indData = useMemo(
+    () =>
+      indicators.map((ind, i) => {
+        const vals = sectors
+          .map((s) => achOf(s.id, ind.id, periodId))
+          .filter((v): v is number => v != null);
+        const a = avg(vals);
+        const value = a == null ? 0 : Math.round(a);
+        const status = a == null ? "none" : perfStatus(a);
+        return { key: `م${i + 1}`, name: ind.name, value, status, fill: statusColor(status) };
+      }),
+    [indicators, sectors, periodId, achOf]
+  );
+
+  const sectorData = useMemo(
+    () =>
+      sectors.map((s, i) => {
+        const vals = indicators
+          .map((ind) => achOf(s.id, ind.id, periodId))
+          .filter((v): v is number => v != null);
+        const a = avg(vals);
+        return {
+          name: s.name,
+          id: s.id,
+          value: a == null ? 0 : Math.round(a),
+          fill: CHART.series[i % CHART.series.length],
+        };
+      }),
+    [sectors, indicators, periodId, achOf]
+  );
+
+  const statusDist = useMemo(() => {
+    const c = { excellent: 0, good: 0, weak: 0, none: 0 };
+    indData.forEach((d) => (c[d.status as keyof typeof c]++));
+    const out = [
+      { name: "ممتاز", value: c.excellent, fill: CHART.excellent },
+      { name: "جيد", value: c.good, fill: CHART.good },
+      { name: "متعثر", value: c.weak, fill: CHART.weak },
+    ];
+    if (c.none) out.push({ name: "بدون بيانات", value: c.none, fill: CHART.none });
+    return out.filter((x) => x.value > 0);
+  }, [indData]);
+
+  const trendData = useMemo(
+    () =>
+      refData.periods.map((p) => {
+        const vals: number[] = [];
+        sectors.forEach((s) =>
+          indicators.forEach((ind) => {
+            const v = achOf(s.id, ind.id, p.id);
+            if (v != null) vals.push(v);
+          })
+        );
+        const a = avg(vals);
+        return { name: p.label.replace(/\s*\d{4}$/, ""), value: a == null ? 0 : Math.round(a), target: 100 };
+      }),
+    [refData.periods, sectors, indicators, achOf]
+  );
+
+  const rankData = useMemo(() => [...indData].sort((a, b) => b.value - a.value), [indData]);
 
   const overall = useMemo(() => {
-    const vals: number[] = [];
-    for (const s of sectors)
-      for (const ind of indicators) {
-        const m = mMap.get(mkey(s.id, ind.id, periodId));
-        const r = evaluate(m?.actual, m?.target);
-        if (r.achievement != null) vals.push(r.achievement);
-      }
-    if (vals.length === 0) return null;
-    return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-  }, [mMap, periodId, sectors, indicators]);
+    const vals = indData.filter((d) => d.status !== "none").map((d) => d.value);
+    return vals.length ? Math.round(avg(vals)!) : null;
+  }, [indData]);
+
+  const counts = useMemo(() => {
+    const c = { excellent: 0, good: 0, weak: 0 };
+    indData.forEach((d) => {
+      if (d.status in c) c[d.status as keyof typeof c]++;
+    });
+    return c;
+  }, [indData]);
 
   function exportCsv() {
     const header = ["القطاع", "المؤشر", "الوحدة", "الربع", "المستهدف", "المحقق", "نسبة الإنجاز %"];
@@ -263,11 +357,16 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
 
+  const donutOverall = [
+    { name: "محقق", value: Math.min(overall ?? 0, 100), fill: CHART.cyan },
+    { name: "متبقٍ", value: Math.max(0, 100 - (overall ?? 0)), fill: "rgba(255,255,255,0.06)" },
+  ];
+
   return (
     <div>
       <div className="toolbar">
         <div>
-          <label style={{ marginBottom: 4 }}>الفترة (للنِسب أعلاه)</label>
+          <label style={{ marginBottom: 4 }}>الفترة</label>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -277,11 +376,6 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           </select>
         </div>
         <div style={{ flex: 1 }} />
-        {overall != null && (
-          <div className="overall-badge">
-            متوسط الإنجاز العام: <strong>{overall}%</strong>
-          </div>
-        )}
         <button className="btn btn-ghost btn-sm" onClick={load}>
           تحديث
         </button>
@@ -290,64 +384,236 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         </button>
       </div>
 
-      {/* المؤشرات التسعة ونِسبها */}
-      <h2 className="section-title">المؤشرات الاستراتيجية</h2>
-      <div className="indicator-cards">
-        {indicators.map((ind, i) => {
-          const ach = indicatorAchievement(ind.id);
-          const status = perfStatus(ach);
-          const c = STATUS_COLORS[status];
-          return (
-            <div key={ind.id} className="indicator-card" style={{ borderTopColor: c.text }}>
-              <div className="indicator-num">المؤشر {i + 1}</div>
-              <div className="indicator-name" title={ind.name}>
-                {ind.name}
-              </div>
-              <div className="indicator-pct" style={{ color: c.text }}>
-                {ach != null ? `${Math.round(ach)}%` : "—"}
-              </div>
-            </div>
-          );
-        })}
+      {/* مؤشرات سريعة */}
+      <div className="kpis">
+        <div className="kpi">
+          <div className="v" style={{ color: CHART.cyan }}>{overall != null ? `${overall}%` : "—"}</div>
+          <div className="l">متوسط الإنجاز العام</div>
+        </div>
+        <div className="kpi">
+          <div className="v">{indicators.length}</div>
+          <div className="l">عدد المؤشرات</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: CHART.excellent }}>{counts.excellent}</div>
+          <div className="l">مؤشرات ممتازة</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: CHART.weak }}>{counts.weak}</div>
+          <div className="l">مؤشرات متعثرة</div>
+        </div>
       </div>
 
-      {/* القطاعات الأربعة */}
-      <h2 className="section-title" style={{ marginTop: 28 }}>
-        القطاعات
-      </h2>
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
       ) : (
-        <div className="sector-list">
-          {sectors.map((s) => {
-            const ach = sectorAchievement(s.id);
-            const status = perfStatus(ach);
-            const c = STATUS_COLORS[status];
-            const isOpen = openSector === s.id;
-            return (
-              <div key={s.id} className="sector-panel">
-                <button
-                  className="sector-head"
-                  onClick={() => setOpenSector(isOpen ? null : s.id)}
-                >
-                  <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
-                  <span className="sector-name">{s.name}</span>
-                  <span className="sector-pct" style={{ background: c.color, color: c.text }}>
-                    {ach != null ? `${Math.round(ach)}%` : "—"}
-                  </span>
-                </button>
-                {isOpen && (
-                  <SectorDetail
-                    sector={s}
-                    indicators={indicators}
-                    periods={refData.periods}
-                    mMap={mMap}
-                  />
-                )}
+        <>
+          {/* الصف الأول: نظرة عامة + القطاعات */}
+          <div className="grid grid-2">
+            <div className="widget">
+              <h3 className="widget-title">نظرة عامة على الإنجاز</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div className="donut-wrap" style={{ width: 200, height: 200 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={donutOverall}
+                        dataKey="value"
+                        innerRadius={66}
+                        outerRadius={90}
+                        startAngle={90}
+                        endAngle={-270}
+                        stroke="none"
+                      >
+                        {donutOverall.map((d, i) => (
+                          <Cell key={i} fill={d.fill} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="donut-center">
+                    <div className="big" style={{ color: CHART.cyan }}>
+                      {overall != null ? `${overall}%` : "—"}
+                    </div>
+                    <div className="lbl">الإنجاز العام</div>
+                  </div>
+                </div>
+                <div className="legend-list" style={{ flex: 1 }}>
+                  <div className="legend-row">
+                    <span className="dot" style={{ background: CHART.excellent }} />
+                    ممتاز <span className="val">{counts.excellent}</span>
+                  </div>
+                  <div className="legend-row">
+                    <span className="dot" style={{ background: CHART.good }} />
+                    جيد <span className="val">{counts.good}</span>
+                  </div>
+                  <div className="legend-row">
+                    <span className="dot" style={{ background: CHART.weak }} />
+                    متعثر <span className="val">{counts.weak}</span>
+                  </div>
+                </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+
+            <div className="widget">
+              <h3 className="widget-title">أداء القطاعات</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 200, height: 200 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RadialBarChart
+                      data={sectorData}
+                      innerRadius="25%"
+                      outerRadius="100%"
+                      startAngle={90}
+                      endAngle={-270}
+                    >
+                      <RadialBar dataKey="value" cornerRadius={6} background={{ fill: "rgba(255,255,255,0.05)" }} />
+                      <Tooltip contentStyle={tooltipStyle} />
+                    </RadialBarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="legend-list" style={{ flex: 1 }}>
+                  {sectorData.map((s) => (
+                    <div className="legend-row" key={s.id}>
+                      <span className="dot" style={{ background: s.fill }} />
+                      <span style={{ fontSize: 12 }}>{s.name}</span>
+                      <span className="val">{s.value}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* الصف الثاني: توزيع + راداري + خط زمني */}
+          <div className="grid grid-3" style={{ marginTop: 16 }}>
+            <div className="widget">
+              <h3 className="widget-title">توزيع حالات المؤشرات</h3>
+              <div style={{ height: 220 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={statusDist} dataKey="value" nameKey="name" innerRadius={48} outerRadius={80} stroke="none">
+                      {statusDist.map((d, i) => (
+                        <Cell key={i} fill={d.fill} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={tooltipStyle} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="legend-list">
+                {statusDist.map((d) => (
+                  <div className="legend-row" key={d.name}>
+                    <span className="dot" style={{ background: d.fill }} />
+                    {d.name} <span className="val">{d.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="widget">
+              <h3 className="widget-title">الأداء حسب المؤشر</h3>
+              <div style={{ height: 280 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={indData} outerRadius="75%">
+                    <PolarGrid stroke={CHART.grid} />
+                    <PolarAngleAxis dataKey="key" tick={{ fill: CHART.axis, fontSize: 12 }} />
+                    <Radar dataKey="value" stroke={CHART.cyan} fill={CHART.cyan} fillOpacity={0.35} />
+                    <Tooltip contentStyle={tooltipStyle} />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="widget">
+              <h3 className="widget-title">تطور الإنجاز عبر الأرباع</h3>
+              <div style={{ height: 280 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                    <CartesianGrid stroke={CHART.grid} vertical={false} />
+                    <XAxis dataKey="name" tick={{ fill: CHART.axis, fontSize: 11 }} />
+                    <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} domain={[0, 120]} />
+                    <Tooltip contentStyle={tooltipStyle} />
+                    <Line type="monotone" dataKey="value" name="المحقق" stroke={CHART.cyan} strokeWidth={3} dot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="target" name="المستهدف" stroke={CHART.good} strokeDasharray="5 5" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+
+          {/* الصف الثالث: أعمدة المؤشرات + الترتيب */}
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="widget">
+              <h3 className="widget-title">نسبة الإنجاز لكل مؤشر</h3>
+              <div style={{ height: 260 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={indData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                    <CartesianGrid stroke={CHART.grid} vertical={false} />
+                    <XAxis dataKey="key" tick={{ fill: CHART.axis, fontSize: 12 }} />
+                    <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} domain={[0, 120]} />
+                    <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                      {indData.map((d, i) => (
+                        <Cell key={i} fill={d.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="widget">
+              <h3 className="widget-title">ترتيب المؤشرات حسب الإنجاز</h3>
+              <div className="rank-list">
+                {rankData.map((d) => (
+                  <div className="rank-row" key={d.key} title={d.name}>
+                    <span className="rank-key">{d.key}</span>
+                    <div className="rank-track">
+                      <div
+                        className="rank-fill"
+                        style={{ width: `${Math.min(d.value, 100)}%`, background: d.fill }}
+                      />
+                    </div>
+                    <span className="rank-val">{d.value}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* القطاعات (تفاصيل قابلة للتوسّع) */}
+          <h2 className="section-title" style={{ marginTop: 28 }}>
+            تفاصيل القطاعات
+          </h2>
+          <div className="sector-list">
+            {sectors.map((s) => {
+              const sd = sectorData.find((x) => x.id === s.id);
+              const status = perfStatus(sd ? sd.value : null);
+              const c = STATUS_COLORS[status];
+              const isOpen = openSector === s.id;
+              return (
+                <div key={s.id} className="sector-panel">
+                  <button className="sector-head" onClick={() => setOpenSector(isOpen ? null : s.id)}>
+                    <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
+                    <span className="sector-name">{s.name}</span>
+                    <span className="sector-pct" style={{ background: c.color, color: c.text }}>
+                      {sd ? `${sd.value}%` : "—"}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <SectorDetail
+                      sector={s}
+                      indicators={indicators}
+                      periods={refData.periods}
+                      mMap={mMap}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );
