@@ -1,25 +1,10 @@
 import { NextResponse } from "next/server";
-import {
-  Entity,
-  User,
-  getEntity,
-  listEntities,
-  listMeasurements,
-  upsertMeasurement,
-} from "@/lib/db";
+import { User, listMeasurements, upsertMeasurement } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 
-// الجهات التي يحق للمستخدم رؤيتها/الكتابة فيها
-function allowedEntities(user: User): Entity[] {
-  const all = listEntities();
-  if (user.role === "admin") return all;
-  return all.filter((e) => user.sectorIds.includes(e.sectorId));
-}
-
-function canAccessEntity(user: User, entityId: string): boolean {
+function canAccessSector(user: User, sectorId: string): boolean {
   if (user.role === "admin") return true;
-  const e = getEntity(entityId);
-  return !!e && user.sectorIds.includes(e.sectorId);
+  return user.sectorIds.includes(sectorId);
 }
 
 export async function GET(req: Request) {
@@ -28,20 +13,21 @@ export async function GET(req: Request) {
 
   const sp = new URL(req.url).searchParams;
   const periodId = sp.get("periodId") || undefined;
-  const entityId = sp.get("entityId") || undefined;
+  const sectorId = sp.get("sectorId") || undefined;
 
-  const allowedIds = allowedEntities(user).map((e) => e.id);
-  let measurements = listMeasurements({ periodId, entityIds: allowedIds });
-  if (entityId) {
-    if (!canAccessEntity(user, entityId)) {
-      return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
-    }
-    measurements = measurements.filter((m) => m.entityId === entityId);
+  if (sectorId && !canAccessSector(user, sectorId)) {
+    return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
+
+  const scope =
+    user.role === "admin" ? undefined : { sectorIds: user.sectorIds };
+  let measurements = listMeasurements({ periodId, sectorId, ...scope });
+  if (sectorId) measurements = measurements.filter((m) => m.sectorId === sectorId);
+
   return NextResponse.json({ measurements });
 }
 
-// حفظ مجموعة قياسات دفعة واحدة (المحقق والمستهدف لكل مؤشر لجهة وفترة)
+// حفظ مجموعة قياسات دفعة واحدة (المستهدف والمحقق لكل مؤشر لقطاع وربع)
 export async function PUT(req: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
@@ -60,17 +46,17 @@ export async function PUT(req: Request) {
 
   const saved = [];
   for (const it of items) {
-    const { entityId, indicatorId, periodId } = it;
-    if (!entityId || !indicatorId || !periodId) continue;
-    if (!canAccessEntity(user, entityId)) {
+    const { sectorId, indicatorId, periodId } = it;
+    if (!sectorId || !indicatorId || !periodId) continue;
+    if (!canAccessSector(user, sectorId)) {
       return NextResponse.json(
-        { error: "لا تملك صلاحية على هذه الجهة" },
+        { error: "لا تملك صلاحية على هذا القطاع" },
         { status: 403 }
       );
     }
     saved.push(
       upsertMeasurement({
-        entityId,
+        sectorId,
         indicatorId,
         periodId,
         target: toNum(it.target),

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { evaluate, fmtValue } from "@/lib/calc";
+import { evaluate, fmtValue, perfStatus } from "@/lib/calc";
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -16,12 +16,6 @@ interface Me {
 }
 interface Sector {
   id: string;
-  name: string;
-  order: number;
-}
-interface Entity {
-  id: string;
-  sectorId: string;
   name: string;
   order: number;
 }
@@ -39,7 +33,7 @@ interface Period {
 }
 interface Measurement {
   id: string;
-  entityId: string;
+  sectorId: string;
   indicatorId: string;
   periodId: string;
   target: number | null;
@@ -48,30 +42,34 @@ interface Measurement {
 }
 interface RefData {
   sectors: Sector[];
-  entities: Entity[];
   indicators: Indicator[];
   periods: Period[];
 }
 
-const EMPTY_REF: RefData = { sectors: [], entities: [], indicators: [], periods: [] };
+const EMPTY_REF: RefData = { sectors: [], indicators: [], periods: [] };
+
+const STATUS_COLORS: Record<string, { color: string; text: string }> = {
+  excellent: { color: "#dcfce7", text: "#15803d" },
+  good: { color: "#fef9c3", text: "#a16207" },
+  weak: { color: "#fee2e2", text: "#b91c1c" },
+  none: { color: "#f1f5f9", text: "#64748b" },
+};
 
 export default function Dashboard({ me }: { me: Me }) {
   const router = useRouter();
   const isAdmin = me.role === "admin";
   const [tab, setTab] = useState<string>("overview");
-  const [refData, setRef] = useState<RefData>(EMPTY_REF);
+  const [refData, setRefData] = useState<RefData>(EMPTY_REF);
   const [loaded, setLoaded] = useState(false);
 
   const loadRef = useCallback(async () => {
-    const [s, e, i, p] = await Promise.all([
+    const [s, i, p] = await Promise.all([
       fetch("/api/sectors").then((r) => r.json()),
-      fetch("/api/entities").then((r) => r.json()),
       fetch(`/api/indicators${isAdmin ? "?all=1" : ""}`).then((r) => r.json()),
       fetch("/api/periods").then((r) => r.json()),
     ]);
-    setRef({
+    setRefData({
       sectors: s.sectors || [],
-      entities: e.entities || [],
       indicators: i.indicators || [],
       periods: p.periods || [],
     });
@@ -162,24 +160,25 @@ function visibleSectors(me: Me, refData: RefData): Sector[] {
 function activeIndicators(refData: RefData): Indicator[] {
   return refData.indicators.filter((i) => i.active);
 }
+function mkey(sectorId: string, indicatorId: string, periodId: string) {
+  return `${sectorId}|${indicatorId}|${periodId}`;
+}
 
 /* ============ النظرة العامة ============ */
 function Overview({ me, refData }: { me: Me; refData: RefData }) {
+  const sectors = visibleSectors(me, refData);
+  const indicators = activeIndicators(refData);
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openSector, setOpenSector] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!periodId) {
-      setMeasurements([]);
-      setLoading(false);
-      return;
-    }
     setLoading(true);
-    const d = await fetch(`/api/measurements?periodId=${periodId}`).then((r) => r.json());
+    const d = await fetch("/api/measurements").then((r) => r.json());
     setMeasurements(d.measurements || []);
     setLoading(false);
-  }, [periodId]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -187,68 +186,67 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     return () => clearInterval(t);
   }, [load]);
 
-  const sectors = visibleSectors(me, refData);
-  const indicators = activeIndicators(refData);
-  const sectorIds = new Set(sectors.map((s) => s.id));
-  const entities = refData.entities.filter((e) => sectorIds.has(e.sectorId));
-
-  // خريطة القياسات: entityId|indicatorId -> measurement
+  // خريطة: قطاع|مؤشر|ربع -> قياس
   const mMap = useMemo(() => {
     const m = new Map<string, Measurement>();
-    for (const x of measurements) m.set(`${x.entityId}|${x.indicatorId}`, x);
+    for (const x of measurements) m.set(mkey(x.sectorId, x.indicatorId, x.periodId), x);
     return m;
   }, [measurements]);
 
-  // ملخص: متوسط الإنجاز العام، عدد الخلايا المتعثرة
-  const summary = useMemo(() => {
-    let sum = 0;
-    let count = 0;
-    let weak = 0;
-    for (const m of measurements) {
-      const r = evaluate(m.actual, m.target);
-      if (r.achievement != null) {
-        sum += r.achievement;
-        count++;
-        if (r.status === "weak") weak++;
-      }
+  // نسبة كل مؤشر (متوسط القطاعات) للفترة المختارة
+  function indicatorAchievement(indId: string): number | null {
+    const vals: number[] = [];
+    for (const s of sectors) {
+      const m = mMap.get(mkey(s.id, indId, periodId));
+      const r = evaluate(m?.actual, m?.target);
+      if (r.achievement != null) vals.push(r.achievement);
     }
-    return {
-      avg: count ? Math.round(sum / count) : null,
-      measured: count,
-      weak,
-    };
-  }, [measurements]);
+    if (vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }
+
+  // نسبة القطاع (متوسط مؤشراته) للفترة المختارة
+  function sectorAchievement(sectorId: string): number | null {
+    const vals: number[] = [];
+    for (const ind of indicators) {
+      const m = mMap.get(mkey(sectorId, ind.id, periodId));
+      const r = evaluate(m?.actual, m?.target);
+      if (r.achievement != null) vals.push(r.achievement);
+    }
+    if (vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }
+
+  const overall = useMemo(() => {
+    const vals: number[] = [];
+    for (const s of sectors)
+      for (const ind of indicators) {
+        const m = mMap.get(mkey(s.id, ind.id, periodId));
+        const r = evaluate(m?.actual, m?.target);
+        if (r.achievement != null) vals.push(r.achievement);
+      }
+    if (vals.length === 0) return null;
+    return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  }, [mMap, periodId, sectors, indicators]);
 
   function exportCsv() {
-    const header = [
-      "القطاع",
-      "الجهة",
-      "المؤشر",
-      "الوحدة",
-      "المستهدف",
-      "المحقق",
-      "نسبة الإنجاز %",
-      "الحالة",
-    ];
+    const header = ["القطاع", "المؤشر", "الوحدة", "الربع", "المستهدف", "المحقق", "نسبة الإنجاز %"];
     const rows: string[][] = [];
-    for (const s of sectors) {
-      for (const e of entities.filter((x) => x.sectorId === s.id)) {
-        for (const ind of indicators) {
-          const m = mMap.get(`${e.id}|${ind.id}`);
+    for (const s of sectors)
+      for (const ind of indicators)
+        for (const p of refData.periods) {
+          const m = mMap.get(mkey(s.id, ind.id, p.id));
           const r = evaluate(m?.actual, m?.target);
           rows.push([
             s.name,
-            e.name,
             ind.name,
             ind.unit === "percent" ? "نسبة" : "عدد",
+            p.label,
             m?.target != null ? String(m.target) : "",
             m?.actual != null ? String(m.actual) : "",
             r.achievement != null ? String(Math.round(r.achievement)) : "",
-            r.label,
           ]);
         }
-      }
-    }
     const csv = [header, ...rows]
       .map((r) => r.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(","))
       .join("\r\n");
@@ -256,21 +254,20 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const plabel = refData.periods.find((p) => p.id === periodId)?.label || "";
-    a.download = `الأداء-${plabel}.csv`;
+    a.download = `الأداء.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد فترات. أضف فترة من تبويب الهيكل التنظيمي.</div>;
+    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
 
   return (
     <div>
       <div className="toolbar">
         <div>
-          <label style={{ marginBottom: 4 }}>الفترة</label>
+          <label style={{ marginBottom: 4 }}>الفترة (للنِسب أعلاه)</label>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -280,6 +277,11 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           </select>
         </div>
         <div style={{ flex: 1 }} />
+        {overall != null && (
+          <div className="overall-badge">
+            متوسط الإنجاز العام: <strong>{overall}%</strong>
+          </div>
+        )}
         <button className="btn btn-ghost btn-sm" onClick={load}>
           تحديث
         </button>
@@ -288,127 +290,160 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         </button>
       </div>
 
-      {/* بطاقات الملخص */}
-      <div className="cards">
-        <StatCard label="متوسط الإنجاز العام" value={summary.avg != null ? `${summary.avg}%` : "—"} />
-        <StatCard label="عدد الجهات" value={String(entities.length)} />
-        <StatCard label="المؤشرات المقاسة" value={String(summary.measured)} />
-        <StatCard label="مؤشرات متعثرة" value={String(summary.weak)} danger={summary.weak > 0} />
+      {/* المؤشرات التسعة ونِسبها */}
+      <h2 className="section-title">المؤشرات الاستراتيجية</h2>
+      <div className="indicator-cards">
+        {indicators.map((ind, i) => {
+          const ach = indicatorAchievement(ind.id);
+          const status = perfStatus(ach);
+          const c = STATUS_COLORS[status];
+          return (
+            <div key={ind.id} className="indicator-card" style={{ borderTopColor: c.text }}>
+              <div className="indicator-num">المؤشر {i + 1}</div>
+              <div className="indicator-name" title={ind.name}>
+                {ind.name}
+              </div>
+              <div className="indicator-pct" style={{ color: c.text }}>
+                {ach != null ? `${Math.round(ach)}%` : "—"}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
+      {/* القطاعات الأربعة */}
+      <h2 className="section-title" style={{ marginTop: 28 }}>
+        القطاعات
+      </h2>
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
-      ) : entities.length === 0 ? (
-        <div className="empty">لا توجد جهات بعد.</div>
       ) : (
-        <div style={{ overflowX: "auto" }} className="spacer-top">
-          <table className="matrix">
-            <thead>
-              <tr>
-                <th className="sticky-col">الجهة</th>
-                {indicators.map((ind, i) => (
-                  <th key={ind.id} title={ind.name}>
-                    م{i + 1}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sectors.map((s) => {
-                const sectorEntities = entities.filter((e) => e.sectorId === s.id);
-                if (sectorEntities.length === 0) return null;
-                return (
-                  <SectorRows
-                    key={s.id}
+        <div className="sector-list">
+          {sectors.map((s) => {
+            const ach = sectorAchievement(s.id);
+            const status = perfStatus(ach);
+            const c = STATUS_COLORS[status];
+            const isOpen = openSector === s.id;
+            return (
+              <div key={s.id} className="sector-panel">
+                <button
+                  className="sector-head"
+                  onClick={() => setOpenSector(isOpen ? null : s.id)}
+                >
+                  <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
+                  <span className="sector-name">{s.name}</span>
+                  <span className="sector-pct" style={{ background: c.color, color: c.text }}>
+                    {ach != null ? `${Math.round(ach)}%` : "—"}
+                  </span>
+                </button>
+                {isOpen && (
+                  <SectorDetail
                     sector={s}
-                    entities={sectorEntities}
                     indicators={indicators}
+                    periods={refData.periods}
                     mMap={mMap}
                   />
-                );
-              })}
-            </tbody>
-          </table>
-          <IndicatorLegend indicators={indicators} />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function StatCard({
-  label,
-  value,
-  danger,
+function SectorDetail({
+  sector,
+  indicators,
+  periods,
+  mMap,
 }: {
-  label: string;
-  value: string;
-  danger?: boolean;
+  sector: Sector;
+  indicators: Indicator[];
+  periods: Period[];
+  mMap: Map<string, Measurement>;
 }) {
   return (
-    <div className="stat-card">
-      <div className="stat-value" style={danger ? { color: "var(--danger)" } : undefined}>
-        {value}
-      </div>
-      <div className="stat-label">{label}</div>
+    <div className="sector-detail" style={{ overflowX: "auto" }}>
+      <table className="detail-table">
+        <thead>
+          <tr>
+            <th className="ind-col">المؤشر</th>
+            {periods.map((p) => (
+              <th key={p.id} colSpan={3}>
+                {p.label}
+              </th>
+            ))}
+          </tr>
+          <tr className="sub-head">
+            <th className="ind-col"></th>
+            {periods.map((p) => (
+              <SubHead key={p.id} />
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {indicators.map((ind, i) => (
+            <tr key={ind.id}>
+              <td className="ind-col">
+                <strong>م{i + 1}.</strong> {ind.name}{" "}
+                <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
+              </td>
+              {periods.map((p) => {
+                const m = mMap.get(mkey(sector.id, ind.id, p.id));
+                const r = evaluate(m?.actual, m?.target);
+                const c = STATUS_COLORS[r.status];
+                return (
+                  <ValueCells
+                    key={p.id}
+                    target={fmtValue(m?.target, ind.unit)}
+                    actual={fmtValue(m?.actual, ind.unit)}
+                    pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
+                    color={c.color}
+                    text={c.text}
+                  />
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function SectorRows({
-  sector,
-  entities,
-  indicators,
-  mMap,
-}: {
-  sector: Sector;
-  entities: Entity[];
-  indicators: Indicator[];
-  mMap: Map<string, Measurement>;
-}) {
+function SubHead() {
   return (
     <>
-      <tr className="sector-row">
-        <td className="sticky-col" colSpan={indicators.length + 1}>
-          {sector.name}
-        </td>
-      </tr>
-      {entities.map((e) => (
-        <tr key={e.id}>
-          <td className="sticky-col">{e.name}</td>
-          {indicators.map((ind) => {
-            const m = mMap.get(`${e.id}|${ind.id}`);
-            const r = evaluate(m?.actual, m?.target);
-            return (
-              <td
-                key={ind.id}
-                style={{ background: r.color, color: r.text, textAlign: "center" }}
-                title={`${ind.name}\nالمحقق: ${fmtValue(m?.actual, ind.unit)} | المستهدف: ${fmtValue(
-                  m?.target,
-                  ind.unit
-                )}`}
-              >
-                {r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
-              </td>
-            );
-          })}
-        </tr>
-      ))}
+      <th className="mini">مستهدف</th>
+      <th className="mini">محقق</th>
+      <th className="mini">الإنجاز</th>
     </>
   );
 }
 
-function IndicatorLegend({ indicators }: { indicators: Indicator[] }) {
+function ValueCells({
+  target,
+  actual,
+  pct,
+  color,
+  text,
+}: {
+  target: string;
+  actual: string;
+  pct: string;
+  color: string;
+  text: string;
+}) {
   return (
-    <div className="legend">
-      <div className="legend-title">دليل المؤشرات:</div>
-      {indicators.map((ind, i) => (
-        <div key={ind.id} className="legend-item">
-          <strong>م{i + 1}:</strong> {ind.name}{" "}
-          <span className="muted">({ind.unit === "percent" ? "نسبة" : "عدد"})</span>
-        </div>
-      ))}
-    </div>
+    <>
+      <td className="mini">{target}</td>
+      <td className="mini">{actual}</td>
+      <td className="mini" style={{ background: color, color: text, fontWeight: 700 }}>
+        {pct}
+      </td>
+    </>
   );
 }
 
@@ -417,28 +452,19 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
-  const sectorEntities = refData.entities.filter((e) => e.sectorId === sectorId);
-  const [entityId, setEntityId] = useState("");
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // عند تغيير القطاع، اختر أول جهة
-  useEffect(() => {
-    const first = refData.entities.find((e) => e.sectorId === sectorId);
-    setEntityId(first?.id || "");
-  }, [sectorId, refData.entities]);
-
-  // تحميل القياسات الحالية للجهة والفترة
   const loadVals = useCallback(async () => {
-    if (!entityId || !periodId) {
+    if (!sectorId || !periodId) {
       setVals({});
       return;
     }
     const d = await fetch(
-      `/api/measurements?entityId=${entityId}&periodId=${periodId}`
+      `/api/measurements?sectorId=${sectorId}&periodId=${periodId}`
     ).then((r) => r.json());
     const map: Record<string, { target: string; actual: string }> = {};
     for (const m of (d.measurements || []) as Measurement[]) {
@@ -448,7 +474,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       };
     }
     setVals(map);
-  }, [entityId, periodId]);
+  }, [sectorId, periodId]);
 
   useEffect(() => {
     loadVals();
@@ -464,7 +490,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
     setLoading(true);
     try {
       const items = indicators.map((ind) => ({
-        entityId,
+        sectorId,
         indicatorId: ind.id,
         periodId,
         target: vals[ind.id]?.target ?? "",
@@ -491,7 +517,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
     );
   }
   if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد فترات. أضف فترة من تبويب الهيكل التنظيمي.</div>;
+    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
 
   return (
@@ -509,18 +535,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
           </select>
         </div>
         <div>
-          <label>الجهة</label>
-          <select value={entityId} onChange={(e) => setEntityId(e.target.value)}>
-            {sectorEntities.length === 0 && <option value="">لا توجد جهات</option>}
-            {sectorEntities.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label>الفترة</label>
+          <label>الربع</label>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -534,90 +549,72 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
-      {!entityId ? (
-        <p className="empty">اختر جهة لإدخال بياناتها (أضف جهات من تبويب الهيكل).</p>
-      ) : (
-        <>
-          <div style={{ overflowX: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ minWidth: 280 }}>المؤشر</th>
-                  <th>المستهدف</th>
-                  <th>المحقق</th>
-                  <th>نسبة الإنجاز</th>
+      <div style={{ overflowX: "auto" }}>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ minWidth: 280 }}>المؤشر</th>
+              <th>المستهدف</th>
+              <th>المحقق</th>
+              <th>نسبة الإنجاز</th>
+            </tr>
+          </thead>
+          <tbody>
+            {indicators.map((ind, i) => {
+              const tv = vals[ind.id]?.target ?? "";
+              const av = vals[ind.id]?.actual ?? "";
+              const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv));
+              const c = STATUS_COLORS[r.status];
+              return (
+                <tr key={ind.id}>
+                  <td>
+                    <strong>م{i + 1}.</strong> {ind.name}{" "}
+                    <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
+                  </td>
+                  <td style={{ width: 110 }}>
+                    <input
+                      type="number"
+                      step="any"
+                      value={tv}
+                      onChange={(e) => setVal(ind.id, "target", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ width: 110 }}>
+                    <input
+                      type="number"
+                      step="any"
+                      value={av}
+                      onChange={(e) => setVal(ind.id, "actual", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ textAlign: "center" }}>
+                    <span className="badge" style={{ background: c.color, color: c.text }}>
+                      {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
+                    </span>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {indicators.map((ind, i) => {
-                  const tv = vals[ind.id]?.target ?? "";
-                  const av = vals[ind.id]?.actual ?? "";
-                  const r = evaluate(
-                    av === "" ? null : Number(av),
-                    tv === "" ? null : Number(tv)
-                  );
-                  return (
-                    <tr key={ind.id}>
-                      <td>
-                        <strong>م{i + 1}.</strong> {ind.name}{" "}
-                        <span className="muted">
-                          ({ind.unit === "percent" ? "%" : "عدد"})
-                        </span>
-                      </td>
-                      <td style={{ width: 110 }}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={tv}
-                          onChange={(e) => setVal(ind.id, "target", e.target.value)}
-                        />
-                      </td>
-                      <td style={{ width: 110 }}>
-                        <input
-                          type="number"
-                          step="any"
-                          value={av}
-                          onChange={(e) => setVal(ind.id, "actual", e.target.value)}
-                        />
-                      </td>
-                      <td style={{ textAlign: "center" }}>
-                        <span
-                          className="badge"
-                          style={{ background: r.color, color: r.text }}
-                        >
-                          {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ marginTop: 16 }}>
-            <button className="btn" onClick={save} disabled={loading}>
-              {loading ? "جارٍ الحفظ..." : "حفظ القياسات"}
-            </button>
-          </div>
-        </>
-      )}
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 16 }}>
+        <button className="btn" onClick={save} disabled={loading}>
+          {loading ? "جارٍ الحفظ..." : "حفظ القياسات"}
+        </button>
+      </div>
     </div>
   );
 }
 
-/* ============ الهيكل التنظيمي (مدير الإدارة) ============ */
+/* ============ الهيكل التنظيمي ============ */
 function StructureManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [sub, setSub] = useState<"sectors" | "entities" | "indicators" | "periods">(
-    "sectors"
-  );
+  const [sub, setSub] = useState<"sectors" | "indicators" | "periods">("sectors");
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
         <button className={`tab ${sub === "sectors" ? "active" : ""}`} onClick={() => setSub("sectors")}>
           القطاعات
-        </button>
-        <button className={`tab ${sub === "entities" ? "active" : ""}`} onClick={() => setSub("entities")}>
-          الجهات
         </button>
         <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
           المؤشرات
@@ -627,7 +624,6 @@ function StructureManager({ refData, reload }: { refData: RefData; reload: () =>
         </button>
       </div>
       {sub === "sectors" && <SectorsManager refData={refData} reload={reload} />}
-      {sub === "entities" && <EntitiesManager refData={refData} reload={reload} />}
       {sub === "indicators" && <IndicatorsManager refData={refData} reload={reload} />}
       {sub === "periods" && <PeriodsManager refData={refData} reload={reload} />}
     </div>
@@ -663,7 +659,7 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
     }
   }
   async function remove(id: string) {
-    if (!confirm("حذف القطاع سيحذف جهاته وقياساتها. متابعة؟")) return;
+    if (!confirm("حذف القطاع سيحذف قياساته. متابعة؟")) return;
     await fetch(`/api/sectors/${id}`, { method: "DELETE" });
     reload();
   }
@@ -672,11 +668,7 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
       <h2 className="section-title">القطاعات ({refData.sectors.length}/7)</h2>
       {err && <div className="alert alert-error">{err}</div>}
       <div className="row" style={{ marginBottom: 16 }}>
-        <input
-          placeholder="اسم القطاع"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        <input placeholder="اسم القطاع" value={name} onChange={(e) => setName(e.target.value)} />
         <div style={{ flex: "0 0 auto" }}>
           <button className="btn" onClick={add} disabled={refData.sectors.length >= 7}>
             إضافة قطاع
@@ -687,7 +679,6 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
         <thead>
           <tr>
             <th>القطاع</th>
-            <th>عدد الجهات</th>
             <th></th>
           </tr>
         </thead>
@@ -695,104 +686,12 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
           {refData.sectors.map((s) => (
             <tr key={s.id}>
               <td>{s.name}</td>
-              <td>{refData.entities.filter((e) => e.sectorId === s.id).length}</td>
               <td>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => rename(s.id, s.name)}>
                     تعديل
                   </button>
                   <button className="btn btn-danger btn-sm" onClick={() => remove(s.id)}>
-                    حذف
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function EntitiesManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [sectorId, setSectorId] = useState(refData.sectors[0]?.id || "");
-  const [name, setName] = useState("");
-  const [err, setErr] = useState("");
-  async function add() {
-    setErr("");
-    const res = await fetch("/api/entities", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sectorId, name }),
-    });
-    const d = await res.json();
-    if (!res.ok) setErr(d.error || "خطأ");
-    else {
-      setName("");
-      reload();
-    }
-  }
-  async function rename(id: string, current: string) {
-    const v = prompt("اسم الجهة الجديد:", current);
-    if (v && v.trim()) {
-      await fetch(`/api/entities/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: v }),
-      });
-      reload();
-    }
-  }
-  async function remove(id: string) {
-    if (!confirm("حذف الجهة سيحذف قياساتها. متابعة؟")) return;
-    await fetch(`/api/entities/${id}`, { method: "DELETE" });
-    reload();
-  }
-  const sectorName = (id: string) => refData.sectors.find((s) => s.id === id)?.name || "—";
-  return (
-    <div className="card">
-      <h2 className="section-title">الجهات ({refData.entities.length})</h2>
-      {err && <div className="alert alert-error">{err}</div>}
-      <div className="row" style={{ marginBottom: 16 }}>
-        <div>
-          <label>القطاع</label>
-          <select value={sectorId} onChange={(e) => setSectorId(e.target.value)}>
-            {refData.sectors.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label>اسم الجهة</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div style={{ flex: "0 0 auto" }}>
-          <button className="btn" onClick={add} disabled={!sectorId}>
-            إضافة جهة
-          </button>
-        </div>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>الجهة</th>
-            <th>القطاع</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {refData.entities.map((e) => (
-            <tr key={e.id}>
-              <td>{e.name}</td>
-              <td>{sectorName(e.sectorId)}</td>
-              <td>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => rename(e.id, e.name)}>
-                    تعديل
-                  </button>
-                  <button className="btn btn-danger btn-sm" onClick={() => remove(e.id)}>
                     حذف
                   </button>
                 </div>
@@ -842,8 +741,8 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
     <div className="card">
       <h2 className="section-title">المؤشرات ({list.length})</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot;
-        للنسب المئوية.
+        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للنسب
+        المئوية.
       </p>
       {msg && <div className="alert alert-success">{msg}</div>}
       {list.map((ind, i) => (
@@ -1059,8 +958,7 @@ function UsersManager({ refData }: { refData: RefData }) {
       <div className="card" style={{ marginBottom: 24 }}>
         <h2 className="section-title">إضافة مستخدم</h2>
         <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-          مدير القطاع = يدخل بيانات قطاعاته فقط. مدير الإدارة = صلاحيات كاملة على كل
-          القطاعات.
+          مدير القطاع = يدخل بيانات قطاعاته فقط. مدير الإدارة = صلاحيات كاملة على كل القطاعات.
         </p>
         {err && <div className="alert alert-error">{err}</div>}
         {msg && <div className="alert alert-success">{msg}</div>}

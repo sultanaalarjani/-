@@ -34,13 +34,6 @@ export interface Sector {
   order: number;
 }
 
-export interface Entity {
-  id: string;
-  sectorId: string;
-  name: string;
-  order: number;
-}
-
 export type IndicatorUnit = "percent" | "number";
 
 export interface Indicator {
@@ -57,9 +50,10 @@ export interface Period {
   order: number;
 }
 
+// قياس لكل (قطاع × مؤشر × ربع)
 export interface Measurement {
   id: string;
-  entityId: string;
+  sectorId: string;
   indicatorId: string;
   periodId: string;
   target: number | null;
@@ -73,7 +67,6 @@ interface DBShape {
   otps: Otp[];
   sessions: Session[];
   sectors: Sector[];
-  entities: Entity[];
   indicators: Indicator[];
   periods: Period[];
   measurements: Measurement[];
@@ -88,7 +81,6 @@ function defaultDB(): DBShape {
     otps: [],
     sessions: [],
     sectors: [],
-    entities: [],
     indicators: [],
     periods: [],
     measurements: [],
@@ -173,17 +165,12 @@ function seed(db: DBShape): DBShape {
       sectorIds: [],
     });
   }
-  // ضمان وجود sectorIds للمستخدمين القدامى
   db.users.forEach((u) => {
     if (!Array.isArray(u.sectorIds)) u.sectorIds = [];
   });
 
   if (db.sectors.length === 0) {
-    db.sectors = DEFAULT_SECTORS.map((name, i) => ({
-      id: newId(),
-      name,
-      order: i + 1,
-    }));
+    db.sectors = DEFAULT_SECTORS.map((name, i) => ({ id: newId(), name, order: i + 1 }));
   }
 
   if (db.indicators.length === 0) {
@@ -197,11 +184,7 @@ function seed(db: DBShape): DBShape {
   }
 
   if (db.periods.length === 0) {
-    db.periods = DEFAULT_PERIODS.map((label, i) => ({
-      id: newId(),
-      label,
-      order: i + 1,
-    }));
+    db.periods = DEFAULT_PERIODS.map((label, i) => ({ id: newId(), label, order: i + 1 }));
   }
 
   return db;
@@ -328,16 +311,16 @@ export function listSectors(): Sector[] {
   return getDB().sectors.sort((a, b) => a.order - b.order);
 }
 
+export function getSector(id: string): Sector | undefined {
+  return getDB().sectors.find((s) => s.id === id);
+}
+
 export function createSector(name: string): Sector {
   const db = getDB();
   if (db.sectors.length >= MAX_SECTORS) {
     throw new Error(`الحد الأقصى ${MAX_SECTORS} قطاعات`);
   }
-  const sector: Sector = {
-    id: newId(),
-    name: name.trim(),
-    order: db.sectors.length + 1,
-  };
+  const sector: Sector = { id: newId(), name: name.trim(), order: db.sectors.length + 1 };
   db.sectors.push(sector);
   save(db);
   return sector;
@@ -354,60 +337,11 @@ export function updateSector(id: string, name: string) {
 
 export function deleteSector(id: string) {
   const db = getDB();
-  const entityIds = db.entities.filter((e) => e.sectorId === id).map((e) => e.id);
-  db.entities = db.entities.filter((e) => e.sectorId !== id);
-  db.measurements = db.measurements.filter((m) => !entityIds.includes(m.entityId));
+  db.measurements = db.measurements.filter((m) => m.sectorId !== id);
   db.sectors = db.sectors.filter((s) => s.id !== id);
   db.users.forEach((u) => {
     u.sectorIds = (u.sectorIds || []).filter((sid) => sid !== id);
   });
-  save(db);
-}
-
-// ===== الجهات =====
-export function listEntities(): Entity[] {
-  return getDB().entities.sort((a, b) => a.order - b.order);
-}
-
-export function listEntitiesBySector(sectorId: string): Entity[] {
-  return listEntities().filter((e) => e.sectorId === sectorId);
-}
-
-export function getEntity(id: string): Entity | undefined {
-  return getDB().entities.find((e) => e.id === id);
-}
-
-export function createEntity(sectorId: string, name: string): Entity {
-  const db = getDB();
-  if (!db.sectors.some((s) => s.id === sectorId)) {
-    throw new Error("القطاع غير موجود");
-  }
-  const entity: Entity = {
-    id: newId(),
-    sectorId,
-    name: name.trim(),
-    order: db.entities.length + 1,
-  };
-  db.entities.push(entity);
-  save(db);
-  return entity;
-}
-
-export function updateEntity(id: string, patch: { name?: string; sectorId?: string }) {
-  const db = getDB();
-  const e = db.entities.find((x) => x.id === id);
-  if (!e) return;
-  if (patch.name && patch.name.trim()) e.name = patch.name.trim();
-  if (patch.sectorId && db.sectors.some((s) => s.id === patch.sectorId)) {
-    e.sectorId = patch.sectorId;
-  }
-  save(db);
-}
-
-export function deleteEntity(id: string) {
-  const db = getDB();
-  db.entities = db.entities.filter((e) => e.id !== id);
-  db.measurements = db.measurements.filter((m) => m.entityId !== id);
   save(db);
 }
 
@@ -435,7 +369,6 @@ export function saveIndicators(items: IndicatorInput[]): Indicator[] {
       active: i.active !== false,
       order: idx + 1,
     }));
-  // إزالة قياسات المؤشرات المحذوفة
   const ids = new Set(db.indicators.map((i) => i.id));
   db.measurements = db.measurements.filter((m) => ids.has(m.indicatorId));
   save(db);
@@ -449,11 +382,7 @@ export function listPeriods(): Period[] {
 
 export function createPeriod(label: string): Period {
   const db = getDB();
-  const period: Period = {
-    id: newId(),
-    label: label.trim(),
-    order: db.periods.length + 1,
-  };
+  const period: Period = { id: newId(), label: label.trim(), order: db.periods.length + 1 };
   db.periods.push(period);
   save(db);
   return period;
@@ -475,22 +404,21 @@ export function deletePeriod(id: string) {
   save(db);
 }
 
-// ===== القياسات =====
+// ===== القياسات (قطاع × مؤشر × ربع) =====
 export function listMeasurements(filter?: {
-  entityId?: string;
+  sectorId?: string;
   periodId?: string;
-  entityIds?: string[];
+  sectorIds?: string[];
 }): Measurement[] {
   let list = getDB().measurements;
-  if (filter?.entityId) list = list.filter((m) => m.entityId === filter.entityId);
+  if (filter?.sectorId) list = list.filter((m) => m.sectorId === filter.sectorId);
   if (filter?.periodId) list = list.filter((m) => m.periodId === filter.periodId);
-  if (filter?.entityIds) list = list.filter((m) => filter.entityIds!.includes(m.entityId));
+  if (filter?.sectorIds) list = list.filter((m) => filter.sectorIds!.includes(m.sectorId));
   return list;
 }
 
-// حفظ/تحديث قياس واحد لكل (جهة، مؤشر، فترة)
 export function upsertMeasurement(input: {
-  entityId: string;
+  sectorId: string;
   indicatorId: string;
   periodId: string;
   target: number | null;
@@ -500,7 +428,7 @@ export function upsertMeasurement(input: {
   const db = getDB();
   let m = db.measurements.find(
     (x) =>
-      x.entityId === input.entityId &&
+      x.sectorId === input.sectorId &&
       x.indicatorId === input.indicatorId &&
       x.periodId === input.periodId
   );
@@ -512,7 +440,7 @@ export function upsertMeasurement(input: {
   } else {
     m = {
       id: newId(),
-      entityId: input.entityId,
+      sectorId: input.sectorId,
       indicatorId: input.indicatorId,
       periodId: input.periodId,
       target: input.target,
