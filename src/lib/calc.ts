@@ -2,6 +2,13 @@
 
 export type PerfStatus = "excellent" | "good" | "weak" | "none";
 
+export interface Thresholds {
+  good: number; // حد التعثر الجزئي (أصفر) — أقل منه يعتبر متعثرًا
+  excellent: number; // حد "وفق المسار" (أخضر)
+}
+
+export const DEFAULT_THRESHOLDS: Thresholds = { good: 80, excellent: 100 };
+
 export interface PerfResult {
   achievement: number | null; // نسبة الإنجاز %
   status: PerfStatus;
@@ -11,8 +18,8 @@ export interface PerfResult {
 }
 
 const STATUS_META: Record<PerfStatus, { label: string; color: string; text: string }> = {
-  excellent: { label: "ممتاز", color: "#dcfce7", text: "#15803d" },
-  good: { label: "جيد", color: "#fef9c3", text: "#a16207" },
+  excellent: { label: "وفق المسار", color: "#dcfce7", text: "#15803d" },
+  good: { label: "متعثر جزئيًا", color: "#fef9c3", text: "#a16207" },
   weak: { label: "متعثر", color: "#fee2e2", text: "#b91c1c" },
   none: { label: "—", color: "#f1f5f9", text: "#64748b" },
 };
@@ -26,19 +33,27 @@ export function computeAchievement(
   return (actual / target) * 100;
 }
 
-export function perfStatus(achievement: number | null): PerfStatus {
+export function perfStatus(
+  achievement: number | null,
+  t: Thresholds = DEFAULT_THRESHOLDS
+): PerfStatus {
   if (achievement == null) return "none";
-  if (achievement >= 100) return "excellent";
-  if (achievement >= 80) return "good";
+  if (achievement >= t.excellent) return "excellent";
+  if (achievement >= t.good) return "good";
   return "weak";
+}
+
+export function statusMeta(status: PerfStatus) {
+  return STATUS_META[status];
 }
 
 export function evaluate(
   actual: number | null | undefined,
-  target: number | null | undefined
+  target: number | null | undefined,
+  t: Thresholds = DEFAULT_THRESHOLDS
 ): PerfResult {
   const achievement = computeAchievement(actual, target);
-  const status = perfStatus(achievement);
+  const status = perfStatus(achievement, t);
   return { achievement, status, ...STATUS_META[status] };
 }
 

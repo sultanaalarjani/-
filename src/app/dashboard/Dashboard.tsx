@@ -2,54 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { evaluate, fmtValue, perfStatus } from "@/lib/calc";
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  Radar,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  LineChart,
-  Line,
-  RadialBarChart,
-  RadialBar,
-} from "recharts";
-
-const CHART = {
-  grid: "rgba(255,255,255,0.08)",
-  axis: "#93a7c9",
-  excellent: "#22c55e",
-  good: "#f59e0b",
-  weak: "#ef4444",
-  none: "#475569",
-  cyan: "#22d3ee",
-  blue: "#3b82f6",
-  series: ["#22d3ee", "#3b82f6", "#a855f7", "#22c55e", "#f59e0b", "#ec4899", "#14b8a6"],
-};
-function statusColor(s: string) {
-  return s === "excellent"
-    ? CHART.excellent
-    : s === "good"
-    ? CHART.good
-    : s === "weak"
-    ? CHART.weak
-    : CHART.none;
-}
-const tooltipStyle = {
-  background: "#101e3a",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 10,
-  color: "#e8eefc",
-};
+import { evaluate, fmtValue, perfStatus, statusMeta, Thresholds, DEFAULT_THRESHOLDS } from "@/lib/calc";
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -91,16 +44,20 @@ interface RefData {
   sectors: Sector[];
   indicators: Indicator[];
   periods: Period[];
+  thresholds: Thresholds;
 }
 
-const EMPTY_REF: RefData = { sectors: [], indicators: [], periods: [] };
-
-const STATUS_COLORS: Record<string, { color: string; text: string }> = {
-  excellent: { color: "#dcfce7", text: "#15803d" },
-  good: { color: "#fef9c3", text: "#a16207" },
-  weak: { color: "#fee2e2", text: "#b91c1c" },
-  none: { color: "#f1f5f9", text: "#64748b" },
+const EMPTY_REF: RefData = {
+  sectors: [],
+  indicators: [],
+  periods: [],
+  thresholds: DEFAULT_THRESHOLDS,
 };
+
+const GAUGE = { weak: "#ef4444", good: "#f59e0b", excellent: "#22c55e", track: "rgba(255,255,255,0.08)" };
+function statusColor(s: string) {
+  return s === "excellent" ? GAUGE.excellent : s === "good" ? GAUGE.good : s === "weak" ? GAUGE.weak : "#475569";
+}
 
 export default function Dashboard({ me }: { me: Me }) {
   const router = useRouter();
@@ -110,15 +67,19 @@ export default function Dashboard({ me }: { me: Me }) {
   const [loaded, setLoaded] = useState(false);
 
   const loadRef = useCallback(async () => {
-    const [s, i, p] = await Promise.all([
+    const [s, i, p, st] = await Promise.all([
       fetch("/api/sectors").then((r) => r.json()),
       fetch(`/api/indicators${isAdmin ? "?all=1" : ""}`).then((r) => r.json()),
       fetch("/api/periods").then((r) => r.json()),
+      fetch("/api/settings").then((r) => r.json()),
     ]);
     setRefData({
       sectors: s.sectors || [],
       indicators: i.indicators || [],
       periods: p.periods || [],
+      thresholds: st.settings
+        ? { good: st.settings.goodThreshold, excellent: st.settings.excellentThreshold }
+        : DEFAULT_THRESHOLDS,
     });
     setLoaded(true);
   }, [isAdmin]);
@@ -152,30 +113,18 @@ export default function Dashboard({ me }: { me: Me }) {
 
       <div className="container">
         <div className="tabs">
-          <button
-            className={`tab ${tab === "overview" ? "active" : ""}`}
-            onClick={() => setTab("overview")}
-          >
+          <button className={`tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
             النظرة العامة
           </button>
-          <button
-            className={`tab ${tab === "entry" ? "active" : ""}`}
-            onClick={() => setTab("entry")}
-          >
+          <button className={`tab ${tab === "entry" ? "active" : ""}`} onClick={() => setTab("entry")}>
             إدخال البيانات
           </button>
           {isAdmin && (
             <>
-              <button
-                className={`tab ${tab === "structure" ? "active" : ""}`}
-                onClick={() => setTab("structure")}
-              >
+              <button className={`tab ${tab === "structure" ? "active" : ""}`} onClick={() => setTab("structure")}>
                 الهيكل التنظيمي
               </button>
-              <button
-                className={`tab ${tab === "users" ? "active" : ""}`}
-                onClick={() => setTab("users")}
-              >
+              <button className={`tab ${tab === "users" ? "active" : ""}`} onClick={() => setTab("users")}>
                 المدراء والصلاحيات
               </button>
             </>
@@ -188,9 +137,7 @@ export default function Dashboard({ me }: { me: Me }) {
           <>
             {tab === "overview" && <Overview me={me} refData={refData} />}
             {tab === "entry" && <DataEntry me={me} refData={refData} />}
-            {tab === "structure" && isAdmin && (
-              <StructureManager refData={refData} reload={loadRef} />
-            )}
+            {tab === "structure" && isAdmin && <StructureManager refData={refData} reload={loadRef} />}
             {tab === "users" && isAdmin && <UsersManager refData={refData} />}
           </>
         )}
@@ -211,10 +158,67 @@ function mkey(sectorId: string, indicatorId: string, periodId: string) {
   return `${sectorId}|${indicatorId}|${periodId}`;
 }
 
+/* ============ عدّاد نصف دائري (Gauge) ============ */
+function polar(cx: number, cy: number, r: number, angleDeg: number): [number, number] {
+  const a = (angleDeg * Math.PI) / 180;
+  return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+}
+function arc(cx: number, cy: number, r: number, v0: number, v1: number, max: number) {
+  const a0 = 180 - (Math.min(v0, max) / max) * 180;
+  const a1 = 180 - (Math.min(v1, max) / max) * 180;
+  const [x0, y0] = polar(cx, cy, r, a0);
+  const [x1, y1] = polar(cx, cy, r, a1);
+  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+function Gauge({
+  value,
+  thresholds,
+  max = 120,
+}: {
+  value: number | null;
+  thresholds: Thresholds;
+  max?: number;
+}) {
+  const cx = 100;
+  const cy = 95;
+  const r = 72;
+  const sw = 16;
+  const v = value == null ? 0 : Math.max(0, Math.min(value, max));
+  const status = perfStatus(value, thresholds);
+  const color = statusColor(status);
+  const needleAngle = 180 - (v / max) * 180;
+  const [nx, ny] = polar(cx, cy, r - 6, needleAngle);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox="0 0 200 118" width="100%" style={{ display: "block" }}>
+        {/* المناطق الثلاث */}
+        <path d={arc(cx, cy, r, 0, thresholds.good, max)} stroke={GAUGE.weak} strokeWidth={sw} fill="none" strokeLinecap="round" />
+        <path d={arc(cx, cy, r, thresholds.good, thresholds.excellent, max)} stroke={GAUGE.good} strokeWidth={sw} fill="none" />
+        <path d={arc(cx, cy, r, thresholds.excellent, max, max)} stroke={GAUGE.excellent} strokeWidth={sw} fill="none" strokeLinecap="round" />
+        {/* الإبرة */}
+        {value != null && (
+          <>
+            <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="#e8eefc" strokeWidth={3} strokeLinecap="round" />
+            <circle cx={cx} cy={cy} r={6} fill="#e8eefc" />
+          </>
+        )}
+      </svg>
+      <div style={{ textAlign: "center", marginTop: -10 }}>
+        <span style={{ fontSize: 26, fontWeight: 800, color }}>
+          {value == null ? "—" : `${Math.round(value)}%`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* ============ النظرة العامة ============ */
 function Overview({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
+  const thr = refData.thresholds;
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -248,7 +252,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     [mMap]
   );
 
-  // بيانات الرسوم للفترة المختارة
+  // نسبة كل مؤشر (متوسط القطاعات) للفترة المختارة
   const indData = useMemo(
     () =>
       indicators.map((ind, i) => {
@@ -256,64 +260,12 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           .map((s) => achOf(s.id, ind.id, periodId))
           .filter((v): v is number => v != null);
         const a = avg(vals);
-        const value = a == null ? 0 : Math.round(a);
-        const status = a == null ? "none" : perfStatus(a);
-        return { key: `م${i + 1}`, name: ind.name, value, status, fill: statusColor(status) };
+        const value = a == null ? null : Math.round(a);
+        const status = perfStatus(a, thr);
+        return { ...ind, num: i + 1, value, status };
       }),
-    [indicators, sectors, periodId, achOf]
+    [indicators, sectors, periodId, achOf, thr]
   );
-
-  const sectorData = useMemo(
-    () =>
-      sectors.map((s, i) => {
-        const vals = indicators
-          .map((ind) => achOf(s.id, ind.id, periodId))
-          .filter((v): v is number => v != null);
-        const a = avg(vals);
-        return {
-          name: s.name,
-          id: s.id,
-          value: a == null ? 0 : Math.round(a),
-          fill: CHART.series[i % CHART.series.length],
-        };
-      }),
-    [sectors, indicators, periodId, achOf]
-  );
-
-  const statusDist = useMemo(() => {
-    const c = { excellent: 0, good: 0, weak: 0, none: 0 };
-    indData.forEach((d) => (c[d.status as keyof typeof c]++));
-    const out = [
-      { name: "ممتاز", value: c.excellent, fill: CHART.excellent },
-      { name: "جيد", value: c.good, fill: CHART.good },
-      { name: "متعثر", value: c.weak, fill: CHART.weak },
-    ];
-    if (c.none) out.push({ name: "بدون بيانات", value: c.none, fill: CHART.none });
-    return out.filter((x) => x.value > 0);
-  }, [indData]);
-
-  const trendData = useMemo(
-    () =>
-      refData.periods.map((p) => {
-        const vals: number[] = [];
-        sectors.forEach((s) =>
-          indicators.forEach((ind) => {
-            const v = achOf(s.id, ind.id, p.id);
-            if (v != null) vals.push(v);
-          })
-        );
-        const a = avg(vals);
-        return { name: p.label.replace(/\s*\d{4}$/, ""), value: a == null ? 0 : Math.round(a), target: 100 };
-      }),
-    [refData.periods, sectors, indicators, achOf]
-  );
-
-  const rankData = useMemo(() => [...indData].sort((a, b) => b.value - a.value), [indData]);
-
-  const overall = useMemo(() => {
-    const vals = indData.filter((d) => d.status !== "none").map((d) => d.value);
-    return vals.length ? Math.round(avg(vals)!) : null;
-  }, [indData]);
 
   const counts = useMemo(() => {
     const c = { excellent: 0, good: 0, weak: 0 };
@@ -323,6 +275,18 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     return c;
   }, [indData]);
 
+  const overall = useMemo(() => {
+    const vals = indData.filter((d) => d.value != null).map((d) => d.value as number);
+    return vals.length ? Math.round(avg(vals)!) : null;
+  }, [indData]);
+
+  function sectorAch(sectorId: string): number | null {
+    const vals = indicators
+      .map((ind) => achOf(sectorId, ind.id, periodId))
+      .filter((v): v is number => v != null);
+    return avg(vals) == null ? null : Math.round(avg(vals)!);
+  }
+
   function exportCsv() {
     const header = ["القطاع", "المؤشر", "الوحدة", "الربع", "المستهدف", "المحقق", "نسبة الإنجاز %"];
     const rows: string[][] = [];
@@ -330,7 +294,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
       for (const ind of indicators)
         for (const p of refData.periods) {
           const m = mMap.get(mkey(s.id, ind.id, p.id));
-          const r = evaluate(m?.actual, m?.target);
+          const rr = evaluate(m?.actual, m?.target, thr);
           rows.push([
             s.name,
             ind.name,
@@ -338,7 +302,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
             p.label,
             m?.target != null ? String(m.target) : "",
             m?.actual != null ? String(m.actual) : "",
-            r.achievement != null ? String(Math.round(r.achievement)) : "",
+            rr.achievement != null ? String(Math.round(rr.achievement)) : "",
           ]);
         }
     const csv = [header, ...rows]
@@ -348,7 +312,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `الأداء.csv`;
+    a.download = "الأداء.csv";
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -356,11 +320,6 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
   if (refData.periods.length === 0) {
     return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
-
-  const donutOverall = [
-    { name: "محقق", value: Math.min(overall ?? 0, 100), fill: CHART.cyan },
-    { name: "متبقٍ", value: Math.max(0, 100 - (overall ?? 0)), fill: "rgba(255,255,255,0.06)" },
-  ];
 
   return (
     <div>
@@ -384,237 +343,78 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         </button>
       </div>
 
-      {/* مؤشرات سريعة */}
+      {/* المربعات الخمسة */}
       <div className="kpis">
         <div className="kpi">
-          <div className="v" style={{ color: CHART.cyan }}>{overall != null ? `${overall}%` : "—"}</div>
-          <div className="l">متوسط الإنجاز العام</div>
+          <div className="v" style={{ color: "#22d3ee" }}>{overall != null ? `${overall}%` : "—"}</div>
+          <div className="l">الإنجاز العام للمؤشرات</div>
         </div>
         <div className="kpi">
           <div className="v">{indicators.length}</div>
           <div className="l">عدد المؤشرات</div>
         </div>
         <div className="kpi">
-          <div className="v" style={{ color: CHART.excellent }}>{counts.excellent}</div>
-          <div className="l">مؤشرات ممتازة</div>
+          <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
+          <div className="l">المؤشرات وفق المسار</div>
         </div>
         <div className="kpi">
-          <div className="v" style={{ color: CHART.weak }}>{counts.weak}</div>
-          <div className="l">مؤشرات متعثرة</div>
+          <div className="v" style={{ color: GAUGE.good }}>{counts.good}</div>
+          <div className="l">المؤشرات المتعثرة جزئيًا</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: GAUGE.weak }}>{counts.weak}</div>
+          <div className="l">المؤشرات المتعثرة</div>
         </div>
       </div>
 
+      {/* المؤشرات التسعة كعدّادات */}
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
       ) : (
-        <>
-          {/* الصف الأول: نظرة عامة + القطاعات */}
-          <div className="grid grid-2">
-            <div className="widget">
-              <h3 className="widget-title">نظرة عامة على الإنجاز</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div className="donut-wrap" style={{ width: 200, height: 200 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={donutOverall}
-                        dataKey="value"
-                        innerRadius={66}
-                        outerRadius={90}
-                        startAngle={90}
-                        endAngle={-270}
-                        stroke="none"
-                      >
-                        {donutOverall.map((d, i) => (
-                          <Cell key={i} fill={d.fill} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="donut-center">
-                    <div className="big" style={{ color: CHART.cyan }}>
-                      {overall != null ? `${overall}%` : "—"}
-                    </div>
-                    <div className="lbl">الإنجاز العام</div>
-                  </div>
-                </div>
-                <div className="legend-list" style={{ flex: 1 }}>
-                  <div className="legend-row">
-                    <span className="dot" style={{ background: CHART.excellent }} />
-                    ممتاز <span className="val">{counts.excellent}</span>
-                  </div>
-                  <div className="legend-row">
-                    <span className="dot" style={{ background: CHART.good }} />
-                    جيد <span className="val">{counts.good}</span>
-                  </div>
-                  <div className="legend-row">
-                    <span className="dot" style={{ background: CHART.weak }} />
-                    متعثر <span className="val">{counts.weak}</span>
-                  </div>
-                </div>
+        <div className="gauge-grid">
+          {indData.map((ind) => (
+            <div key={ind.id} className="gauge-box" style={{ borderTopColor: statusColor(ind.status) }}>
+              <div className="gauge-head">
+                <span className="gauge-num">المؤشر {ind.num}</span>
+              </div>
+              <div className="gauge-name" title={ind.name}>
+                {ind.name}
+              </div>
+              <Gauge value={ind.value} thresholds={thr} />
+              <div className="gauge-status" style={{ color: statusColor(ind.status) }}>
+                {statusMeta(ind.status).label}
               </div>
             </div>
-
-            <div className="widget">
-              <h3 className="widget-title">أداء القطاعات</h3>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 200, height: 200 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RadialBarChart
-                      data={sectorData}
-                      innerRadius="25%"
-                      outerRadius="100%"
-                      startAngle={90}
-                      endAngle={-270}
-                    >
-                      <RadialBar dataKey="value" cornerRadius={6} background={{ fill: "rgba(255,255,255,0.05)" }} />
-                      <Tooltip contentStyle={tooltipStyle} />
-                    </RadialBarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="legend-list" style={{ flex: 1 }}>
-                  {sectorData.map((s) => (
-                    <div className="legend-row" key={s.id}>
-                      <span className="dot" style={{ background: s.fill }} />
-                      <span style={{ fontSize: 12 }}>{s.name}</span>
-                      <span className="val">{s.value}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* الصف الثاني: توزيع + راداري + خط زمني */}
-          <div className="grid grid-3" style={{ marginTop: 16 }}>
-            <div className="widget">
-              <h3 className="widget-title">توزيع حالات المؤشرات</h3>
-              <div style={{ height: 220 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={statusDist} dataKey="value" nameKey="name" innerRadius={48} outerRadius={80} stroke="none">
-                      {statusDist.map((d, i) => (
-                        <Cell key={i} fill={d.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={tooltipStyle} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="legend-list">
-                {statusDist.map((d) => (
-                  <div className="legend-row" key={d.name}>
-                    <span className="dot" style={{ background: d.fill }} />
-                    {d.name} <span className="val">{d.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="widget">
-              <h3 className="widget-title">الأداء حسب المؤشر</h3>
-              <div style={{ height: 280 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <RadarChart data={indData} outerRadius="75%">
-                    <PolarGrid stroke={CHART.grid} />
-                    <PolarAngleAxis dataKey="key" tick={{ fill: CHART.axis, fontSize: 12 }} />
-                    <Radar dataKey="value" stroke={CHART.cyan} fill={CHART.cyan} fillOpacity={0.35} />
-                    <Tooltip contentStyle={tooltipStyle} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="widget">
-              <h3 className="widget-title">تطور الإنجاز عبر الأرباع</h3>
-              <div style={{ height: 280 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trendData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid stroke={CHART.grid} vertical={false} />
-                    <XAxis dataKey="name" tick={{ fill: CHART.axis, fontSize: 11 }} />
-                    <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} domain={[0, 120]} />
-                    <Tooltip contentStyle={tooltipStyle} />
-                    <Line type="monotone" dataKey="value" name="المحقق" stroke={CHART.cyan} strokeWidth={3} dot={{ r: 4 }} />
-                    <Line type="monotone" dataKey="target" name="المستهدف" stroke={CHART.good} strokeDasharray="5 5" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          {/* الصف الثالث: أعمدة المؤشرات + الترتيب */}
-          <div className="grid grid-2" style={{ marginTop: 16 }}>
-            <div className="widget">
-              <h3 className="widget-title">نسبة الإنجاز لكل مؤشر</h3>
-              <div style={{ height: 260 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={indData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid stroke={CHART.grid} vertical={false} />
-                    <XAxis dataKey="key" tick={{ fill: CHART.axis, fontSize: 12 }} />
-                    <YAxis tick={{ fill: CHART.axis, fontSize: 11 }} domain={[0, 120]} />
-                    <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                      {indData.map((d, i) => (
-                        <Cell key={i} fill={d.fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="widget">
-              <h3 className="widget-title">ترتيب المؤشرات حسب الإنجاز</h3>
-              <div className="rank-list">
-                {rankData.map((d) => (
-                  <div className="rank-row" key={d.key} title={d.name}>
-                    <span className="rank-key">{d.key}</span>
-                    <div className="rank-track">
-                      <div
-                        className="rank-fill"
-                        style={{ width: `${Math.min(d.value, 100)}%`, background: d.fill }}
-                      />
-                    </div>
-                    <span className="rank-val">{d.value}%</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* القطاعات (تفاصيل قابلة للتوسّع) */}
-          <h2 className="section-title" style={{ marginTop: 28 }}>
-            تفاصيل القطاعات
-          </h2>
-          <div className="sector-list">
-            {sectors.map((s) => {
-              const sd = sectorData.find((x) => x.id === s.id);
-              const status = perfStatus(sd ? sd.value : null);
-              const c = STATUS_COLORS[status];
-              const isOpen = openSector === s.id;
-              return (
-                <div key={s.id} className="sector-panel">
-                  <button className="sector-head" onClick={() => setOpenSector(isOpen ? null : s.id)}>
-                    <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
-                    <span className="sector-name">{s.name}</span>
-                    <span className="sector-pct" style={{ background: c.color, color: c.text }}>
-                      {sd ? `${sd.value}%` : "—"}
-                    </span>
-                  </button>
-                  {isOpen && (
-                    <SectorDetail
-                      sector={s}
-                      indicators={indicators}
-                      periods={refData.periods}
-                      mMap={mMap}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </>
+          ))}
+        </div>
       )}
+
+      {/* تفاصيل القطاعات */}
+      <h2 className="section-title" style={{ marginTop: 28 }}>
+        تفاصيل القطاعات
+      </h2>
+      <div className="sector-list">
+        {sectors.map((s) => {
+          const ach = sectorAch(s.id);
+          const status = perfStatus(ach, thr);
+          const meta = statusMeta(status);
+          const isOpen = openSector === s.id;
+          return (
+            <div key={s.id} className="sector-panel">
+              <button className="sector-head" onClick={() => setOpenSector(isOpen ? null : s.id)}>
+                <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
+                <span className="sector-name">{s.name}</span>
+                <span className="sector-pct" style={{ background: meta.color, color: meta.text }}>
+                  {ach != null ? `${ach}%` : "—"}
+                </span>
+              </button>
+              {isOpen && (
+                <SectorDetail sector={s} indicators={indicators} periods={refData.periods} mMap={mMap} thr={thr} />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -624,11 +424,13 @@ function SectorDetail({
   indicators,
   periods,
   mMap,
+  thr,
 }: {
   sector: Sector;
   indicators: Indicator[];
   periods: Period[];
   mMap: Map<string, Measurement>;
+  thr: Thresholds;
 }) {
   return (
     <div className="sector-detail" style={{ overflowX: "auto" }}>
@@ -658,16 +460,15 @@ function SectorDetail({
               </td>
               {periods.map((p) => {
                 const m = mMap.get(mkey(sector.id, ind.id, p.id));
-                const r = evaluate(m?.actual, m?.target);
-                const c = STATUS_COLORS[r.status];
+                const r = evaluate(m?.actual, m?.target, thr);
                 return (
                   <ValueCells
                     key={p.id}
                     target={fmtValue(m?.target, ind.unit)}
                     actual={fmtValue(m?.actual, ind.unit)}
                     pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
-                    color={c.color}
-                    text={c.text}
+                    color={r.color}
+                    text={r.text}
                   />
                 );
               })}
@@ -717,6 +518,7 @@ function ValueCells({
 function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
+  const thr = refData.thresholds;
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
@@ -729,9 +531,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       setVals({});
       return;
     }
-    const d = await fetch(
-      `/api/measurements?sectorId=${sectorId}&periodId=${periodId}`
-    ).then((r) => r.json());
+    const d = await fetch(`/api/measurements?sectorId=${sectorId}&periodId=${periodId}`).then((r) => r.json());
     const map: Record<string, { target: string; actual: string }> = {};
     for (const m of (d.measurements || []) as Measurement[]) {
       map[m.indicatorId] = {
@@ -776,11 +576,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
   }
 
   if (sectors.length === 0) {
-    return (
-      <div className="empty">
-        لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.
-      </div>
-    );
+    return <div className="empty">لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.</div>;
   }
   if (refData.periods.length === 0) {
     return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
@@ -829,8 +625,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
             {indicators.map((ind, i) => {
               const tv = vals[ind.id]?.target ?? "";
               const av = vals[ind.id]?.actual ?? "";
-              const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv));
-              const c = STATUS_COLORS[r.status];
+              const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), thr);
               return (
                 <tr key={ind.id}>
                   <td>
@@ -838,23 +633,13 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
                     <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
                   </td>
                   <td style={{ width: 110 }}>
-                    <input
-                      type="number"
-                      step="any"
-                      value={tv}
-                      onChange={(e) => setVal(ind.id, "target", e.target.value)}
-                    />
+                    <input type="number" step="any" value={tv} onChange={(e) => setVal(ind.id, "target", e.target.value)} />
                   </td>
                   <td style={{ width: 110 }}>
-                    <input
-                      type="number"
-                      step="any"
-                      value={av}
-                      onChange={(e) => setVal(ind.id, "actual", e.target.value)}
-                    />
+                    <input type="number" step="any" value={av} onChange={(e) => setVal(ind.id, "actual", e.target.value)} />
                   </td>
                   <td style={{ textAlign: "center" }}>
-                    <span className="badge" style={{ background: c.color, color: c.text }}>
+                    <span className="badge" style={{ background: r.color, color: r.text }}>
                       {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
                     </span>
                   </td>
@@ -875,7 +660,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
 
 /* ============ الهيكل التنظيمي ============ */
 function StructureManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [sub, setSub] = useState<"sectors" | "indicators" | "periods">("sectors");
+  const [sub, setSub] = useState<"sectors" | "indicators" | "periods" | "thresholds">("sectors");
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
@@ -888,10 +673,70 @@ function StructureManager({ refData, reload }: { refData: RefData; reload: () =>
         <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
           الفترات
         </button>
+        <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
+          عتبات الحالة
+        </button>
       </div>
       {sub === "sectors" && <SectorsManager refData={refData} reload={reload} />}
       {sub === "indicators" && <IndicatorsManager refData={refData} reload={reload} />}
       {sub === "periods" && <PeriodsManager refData={refData} reload={reload} />}
+      {sub === "thresholds" && <ThresholdsManager refData={refData} reload={reload} />}
+    </div>
+  );
+}
+
+function ThresholdsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [good, setGood] = useState(String(refData.thresholds.good));
+  const [excellent, setExcellent] = useState(String(refData.thresholds.excellent));
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  async function save() {
+    setMsg("");
+    setErr("");
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goodThreshold: Number(good), excellentThreshold: Number(excellent) }),
+    });
+    const d = await res.json();
+    if (!res.ok) setErr(d.error || "تعذّر الحفظ");
+    else {
+      setMsg("تم حفظ العتبات ✓");
+      reload();
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2 className="section-title">عتبات حالة المؤشرات</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
+        تتحكم في تلوين المؤشرات حسب نسبة الإنجاز. أي مؤشر تحت حد التعثر الجزئي يعتبر متعثرًا (أحمر).
+      </p>
+      {err && <div className="alert alert-error">{err}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
+      <div className="row">
+        <div>
+          <label>
+            <span className="dot" style={{ background: GAUGE.good, display: "inline-block", marginInlineEnd: 6 }} />
+            حد &quot;متعثر جزئيًا&quot; (أصفر) — النسبة من
+          </label>
+          <input type="number" step="any" value={good} onChange={(e) => setGood(e.target.value)} />
+        </div>
+        <div>
+          <label>
+            <span className="dot" style={{ background: GAUGE.excellent, display: "inline-block", marginInlineEnd: 6 }} />
+            حد &quot;وفق المسار&quot; (أخضر) — النسبة من
+          </label>
+          <input type="number" step="any" value={excellent} onChange={(e) => setExcellent(e.target.value)} />
+        </div>
+      </div>
+      <div style={{ marginTop: 8 }} className="muted">
+        مثال: متعثر &lt; {good || "؟"}% · متعثر جزئيًا {good || "؟"}–{excellent || "؟"}% · وفق المسار ≥ {excellent || "؟"}%
+      </div>
+      <button className="btn" style={{ marginTop: 16 }} onClick={save}>
+        حفظ العتبات
+      </button>
     </div>
   );
 }
@@ -1007,8 +852,7 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
     <div className="card">
       <h2 className="section-title">المؤشرات ({list.length})</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للنسب
-        المئوية.
+        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للنسب المئوية.
       </p>
       {msg && <div className="alert alert-success">{msg}</div>}
       {list.map((ind, i) => (
@@ -1016,11 +860,7 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
           <span className="muted" style={{ flex: "0 0 30px" }}>
             م{i + 1}
           </span>
-          <input
-            placeholder="اسم المؤشر"
-            value={ind.name}
-            onChange={(e) => upd(i, { name: e.target.value })}
-          />
+          <input placeholder="اسم المؤشر" value={ind.name} onChange={(e) => upd(i, { name: e.target.value })} />
           <select
             value={ind.unit}
             onChange={(e) => upd(i, { unit: e.target.value as Unit })}
@@ -1030,18 +870,10 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
             <option value="number">عدد</option>
           </select>
           <label className="checkbox-inline">
-            <input
-              type="checkbox"
-              checked={ind.active}
-              onChange={(e) => upd(i, { active: e.target.checked })}
-            />
+            <input type="checkbox" checked={ind.active} onChange={(e) => upd(i, { active: e.target.checked })} />
             مُفعّل
           </label>
-          <button
-            className="btn btn-danger btn-sm"
-            style={{ flex: "0 0 auto" }}
-            onClick={() => removeInd(i)}
-          >
+          <button className="btn btn-danger btn-sm" style={{ flex: "0 0 auto" }} onClick={() => removeInd(i)}>
             حذف
           </button>
         </div>
@@ -1090,11 +922,7 @@ function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => v
     <div className="card">
       <h2 className="section-title">الفترات ({refData.periods.length})</h2>
       <div className="row" style={{ marginBottom: 16 }}>
-        <input
-          placeholder="مثال: الربع الأول 2026"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
+        <input placeholder="مثال: الربع الأول 2026" value={label} onChange={(e) => setLabel(e.target.value)} />
         <div style={{ flex: "0 0 auto" }}>
           <button className="btn" onClick={add}>
             إضافة فترة
@@ -1216,8 +1044,7 @@ function UsersManager({ refData }: { refData: RefData }) {
   }
 
   const sectorNames = (ids: string[]) =>
-    ids.map((id) => refData.sectors.find((s) => s.id === id)?.name).filter(Boolean).join("، ") ||
-    "—";
+    ids.map((id) => refData.sectors.find((s) => s.id === id)?.name).filter(Boolean).join("، ") || "—";
 
   return (
     <div>
@@ -1259,11 +1086,7 @@ function UsersManager({ refData }: { refData: RefData }) {
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 {refData.sectors.map((s) => (
                   <label key={s.id} className="checkbox-inline">
-                    <input
-                      type="checkbox"
-                      checked={sectorIds.includes(s.id)}
-                      onChange={() => toggleSector(s.id)}
-                    />
+                    <input type="checkbox" checked={sectorIds.includes(s.id)} onChange={() => toggleSector(s.id)} />
                     {s.name}
                   </label>
                 ))}
@@ -1315,10 +1138,7 @@ function UsersManager({ refData }: { refData: RefData }) {
                       القطاعات
                     </button>
                   )}
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => patch(u.id, { active: !u.active })}
-                  >
+                  <button className="btn btn-ghost btn-sm" onClick={() => patch(u.id, { active: !u.active })}>
                     {u.active ? "إيقاف" : "تفعيل"}
                   </button>
                   <button className="btn btn-danger btn-sm" onClick={() => remove(u)}>

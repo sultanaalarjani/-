@@ -62,6 +62,11 @@ export interface Measurement {
   updatedAt: string;
 }
 
+export interface Settings {
+  goodThreshold: number; // حد التعثر الجزئي (أصفر)
+  excellentThreshold: number; // حد "وفق المسار" (أخضر)
+}
+
 interface DBShape {
   users: User[];
   otps: Otp[];
@@ -70,6 +75,7 @@ interface DBShape {
   indicators: Indicator[];
   periods: Period[];
   measurements: Measurement[];
+  settings: Settings;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -84,6 +90,7 @@ function defaultDB(): DBShape {
     indicators: [],
     periods: [],
     measurements: [],
+    settings: { goodThreshold: 80, excellentThreshold: 100 },
   };
 }
 
@@ -415,6 +422,27 @@ export function listMeasurements(filter?: {
   if (filter?.periodId) list = list.filter((m) => m.periodId === filter.periodId);
   if (filter?.sectorIds) list = list.filter((m) => filter.sectorIds!.includes(m.sectorId));
   return list;
+}
+
+// ===== الإعدادات =====
+export function getSettings(): Settings {
+  const s = getDB().settings;
+  return {
+    goodThreshold: typeof s?.goodThreshold === "number" ? s.goodThreshold : 80,
+    excellentThreshold: typeof s?.excellentThreshold === "number" ? s.excellentThreshold : 100,
+  };
+}
+
+export function updateSettings(patch: Partial<Settings>): Settings {
+  const db = getDB();
+  const cur = db.settings || { goodThreshold: 80, excellentThreshold: 100 };
+  if (typeof patch.goodThreshold === "number" && patch.goodThreshold >= 0)
+    cur.goodThreshold = patch.goodThreshold;
+  if (typeof patch.excellentThreshold === "number" && patch.excellentThreshold >= 0)
+    cur.excellentThreshold = patch.excellentThreshold;
+  db.settings = cur;
+  save(db);
+  return cur;
 }
 
 export function upsertMeasurement(input: {

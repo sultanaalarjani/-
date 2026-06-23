@@ -558,6 +558,49 @@ table.detail-table tr.sub-head th {
   border-radius: 10px !important;
   color: var(--text) !important;
 }
+/* عدّادات المؤشرات (gauges) */
+.gauge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 16px;
+}
+.gauge-box {
+  background: linear-gradient(180deg, var(--panel), var(--bg2));
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--primary);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--glow);
+  display: flex;
+  flex-direction: column;
+}
+.gauge-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.gauge-num {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.gauge-name {
+  font-size: 13px;
+  color: var(--text);
+  margin: 6px 0 4px;
+  min-height: 54px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gauge-status {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
 /* قائمة ترتيب المؤشرات (أشرطة) */
 .rank-list {
   display: flex;
