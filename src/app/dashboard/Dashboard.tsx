@@ -223,6 +223,10 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
   const [openSector, setOpenSector] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"excellent" | "good" | "weak" | null>(null);
+  const [openIndicator, setOpenIndicator] = useState<
+    (Indicator & { num: number; value: number | null; status: string }) | null
+  >(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -353,40 +357,68 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="v">{indicators.length}</div>
           <div className="l">عدد المؤشرات</div>
         </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
-          <div className="l">المؤشرات وفق المسار</div>
-        </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.good }}>{counts.good}</div>
-          <div className="l">المؤشرات المتعثرة جزئيًا</div>
-        </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.weak }}>{counts.weak}</div>
-          <div className="l">المؤشرات المتعثرة</div>
-        </div>
+        {(["excellent", "good", "weak"] as const).map((st) => (
+          <div
+            key={st}
+            className={`kpi clickable${statusFilter === st ? " active" : ""}`}
+            style={statusFilter === st ? { borderColor: statusColor(st) } : undefined}
+            onClick={() => setStatusFilter(statusFilter === st ? null : st)}
+          >
+            <div className="v" style={{ color: statusColor(st) }}>{counts[st]}</div>
+            <div className="l">
+              {st === "excellent" ? "المؤشرات وفق المسار" : st === "good" ? "المؤشرات المتعثرة جزئيًا" : "المؤشرات المتعثرة"}
+            </div>
+          </div>
+        ))}
       </div>
+      {statusFilter && (
+        <div className="filter-note">
+          عرض المؤشرات: {statusFilter === "excellent" ? "وفق المسار" : statusFilter === "good" ? "متعثرة جزئيًا" : "متعثرة"}
+          <button className="btn btn-ghost btn-sm" style={{ marginInlineStart: 10 }} onClick={() => setStatusFilter(null)}>
+            إلغاء التصفية
+          </button>
+        </div>
+      )}
 
       {/* المؤشرات التسعة كعدّادات */}
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
       ) : (
         <div className="gauge-grid">
-          {indData.map((ind) => (
-            <div key={ind.id} className="gauge-box" style={{ borderTopColor: statusColor(ind.status) }}>
-              <div className="gauge-head">
-                <span className="gauge-num">المؤشر {ind.num}</span>
+          {indData.map((ind) => {
+            const dim = statusFilter != null && ind.status !== statusFilter;
+            return (
+              <div
+                key={ind.id}
+                className={`gauge-box clickable${dim ? " dimmed" : ""}`}
+                style={{ borderTopColor: statusColor(ind.status) }}
+                onClick={() => setOpenIndicator(ind)}
+              >
+                <div className="gauge-head">
+                  <span className="gauge-num">المؤشر {ind.num}</span>
+                </div>
+                <div className="gauge-name" title={ind.name}>
+                  {ind.name}
+                </div>
+                <Gauge value={ind.value} thresholds={thr} />
+                <div className="gauge-status" style={{ color: statusColor(ind.status) }}>
+                  {statusMeta(ind.status).label}
+                </div>
               </div>
-              <div className="gauge-name" title={ind.name}>
-                {ind.name}
-              </div>
-              <Gauge value={ind.value} thresholds={thr} />
-              <div className="gauge-status" style={{ color: statusColor(ind.status) }}>
-                {statusMeta(ind.status).label}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+
+      {openIndicator && (
+        <IndicatorModal
+          indicator={openIndicator}
+          sectors={sectors}
+          period={refData.periods.find((p) => p.id === periodId) || refData.periods[0]}
+          mMap={mMap}
+          thr={thr}
+          onClose={() => setOpenIndicator(null)}
+        />
       )}
 
       {/* تفاصيل القطاعات */}
@@ -511,6 +543,72 @@ function ValueCells({
         {pct}
       </td>
     </>
+  );
+}
+
+function IndicatorModal({
+  indicator,
+  sectors,
+  period,
+  mMap,
+  thr,
+  onClose,
+}: {
+  indicator: Indicator & { num: number };
+  sectors: Sector[];
+  period: Period;
+  mMap: Map<string, Measurement>;
+  thr: Thresholds;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div>
+            <div className="muted" style={{ fontSize: 12 }}>المؤشر {indicator.num}</div>
+            <h3 style={{ margin: "4px 0 0" }}>{indicator.name}</h3>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {period?.label} · {indicator.unit === "percent" ? "نسبة %" : "عدد"}
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+            إغلاق
+          </button>
+        </div>
+
+        <div style={{ overflowX: "auto", marginTop: 16 }}>
+          <table>
+            <thead>
+              <tr>
+                <th>القطاع</th>
+                <th>المستهدف</th>
+                <th>المحقق</th>
+                <th>نسبة الإنجاز</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectors.map((s) => {
+                const m = period ? mMap.get(mkey(s.id, indicator.id, period.id)) : undefined;
+                const r = evaluate(m?.actual, m?.target, thr);
+                return (
+                  <tr key={s.id}>
+                    <td>{s.name}</td>
+                    <td>{fmtValue(m?.target, indicator.unit)}</td>
+                    <td>{fmtValue(m?.actual, indicator.unit)}</td>
+                    <td>
+                      <span className="badge" style={{ background: r.color, color: r.text }}>
+                        {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
 
