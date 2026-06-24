@@ -414,7 +414,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         <IndicatorModal
           indicator={openIndicator}
           sectors={sectors}
-          period={refData.periods.find((p) => p.id === periodId) || refData.periods[0]}
+          periods={refData.periods}
           mMap={mMap}
           thr={thr}
           onClose={() => setOpenIndicator(null)}
@@ -549,27 +549,27 @@ function ValueCells({
 function IndicatorModal({
   indicator,
   sectors,
-  period,
+  periods,
   mMap,
   thr,
   onClose,
 }: {
   indicator: Indicator & { num: number };
   sectors: Sector[];
-  period: Period;
+  periods: Period[];
   mMap: Map<string, Measurement>;
   thr: Thresholds;
   onClose: () => void;
 }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" style={{ maxWidth: 920 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
             <div className="muted" style={{ fontSize: 12 }}>المؤشر {indicator.num}</div>
             <h3 style={{ margin: "4px 0 0" }}>{indicator.name}</h3>
             <div className="muted" style={{ fontSize: 13 }}>
-              {period?.label} · {indicator.unit === "percent" ? "نسبة %" : "عدد"}
+              مقارنة التطور عبر الأرباع · {indicator.unit === "percent" ? "نسبة %" : "عدد"}
             </div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>
@@ -577,33 +577,44 @@ function IndicatorModal({
           </button>
         </div>
 
-        <div style={{ overflowX: "auto", marginTop: 16 }}>
-          <table>
+        <div className="sector-detail" style={{ overflowX: "auto", marginTop: 16, padding: 0 }}>
+          <table className="detail-table">
             <thead>
               <tr>
-                <th>القطاع</th>
-                <th>المستهدف</th>
-                <th>المحقق</th>
-                <th>نسبة الإنجاز</th>
+                <th className="ind-col">القطاع</th>
+                {periods.map((p) => (
+                  <th key={p.id} colSpan={3}>
+                    {p.label}
+                  </th>
+                ))}
+              </tr>
+              <tr className="sub-head">
+                <th className="ind-col"></th>
+                {periods.map((p) => (
+                  <SubHead key={p.id} />
+                ))}
               </tr>
             </thead>
             <tbody>
-              {sectors.map((s) => {
-                const m = period ? mMap.get(mkey(s.id, indicator.id, period.id)) : undefined;
-                const r = evaluate(m?.actual, m?.target, thr);
-                return (
-                  <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>{fmtValue(m?.target, indicator.unit)}</td>
-                    <td>{fmtValue(m?.actual, indicator.unit)}</td>
-                    <td>
-                      <span className="badge" style={{ background: r.color, color: r.text }}>
-                        {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
+              {sectors.map((s) => (
+                <tr key={s.id}>
+                  <td className="ind-col">{s.name}</td>
+                  {periods.map((p) => {
+                    const m = mMap.get(mkey(s.id, indicator.id, p.id));
+                    const r = evaluate(m?.actual, m?.target, thr);
+                    return (
+                      <ValueCells
+                        key={p.id}
+                        target={fmtValue(m?.target, indicator.unit)}
+                        actual={fmtValue(m?.actual, indicator.unit)}
+                        pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
+                        color={r.color}
+                        text={r.text}
+                      />
+                    );
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
