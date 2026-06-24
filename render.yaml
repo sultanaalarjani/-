@@ -1,0 +1,20 @@
+# إعداد نشر تلقائي على Render — https://render.com
+# الخطوات: New + → Blueprint → اختر هذا المستودع والفرع → Apply
+services:
+  - type: web
+    name: perf-dashboard
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    envVars:
+      # إيميل مدير الإدارة (سجّلي الدخول به — الرمز يظهر على الشاشة في وضع العرض)
+      - key: ADMIN_EMAIL
+        value: salarjani@adaa.gov.sa
+      - key: ADMIN_NAME
+        value: مدير إدارة عمليات الأداء
+      # الموقع يعمل عبر HTTPS على Render
+      - key: COOKIE_SECURE
+        value: "true"
+      # تعبئة بيانات تجريبية تلقائيًا للعرض (اجعلها false للاستخدام الفعلي)
+      - key: SEED_DEMO
+        value: "true"

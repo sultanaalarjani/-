@@ -194,6 +194,32 @@ function seed(db: DBShape): DBShape {
     db.periods = DEFAULT_PERIODS.map((label, i) => ({ id: newId(), label, order: i + 1 }));
   }
 
+  // بيانات تجريبية للعرض فقط (SEED_DEMO=true) — قيم ثابتة بلا عشوائية
+  if (process.env.SEED_DEMO === "true" && db.measurements.length === 0) {
+    db.sectors.forEach((s, si) =>
+      db.indicators.forEach((ind, ii) =>
+        db.periods.forEach((p, pi) => {
+          const isNum = ind.unit === "number";
+          const target = isNum ? 10 : 100;
+          // قيمة محققة متنوّعة (تتحسّن عبر الأرباع قليلًا) بدون عشوائية
+          const base = isNum ? 10 : 100;
+          const variance = ((si * 7 + ii * 13 + pi * 5) % 6) * (isNum ? 1 : 8);
+          const actual = Math.max(0, base - variance + pi * (isNum ? 0 : 2));
+          db.measurements.push({
+            id: newId(),
+            sectorId: s.id,
+            indicatorId: ind.id,
+            periodId: p.id,
+            target,
+            actual: isNum ? Math.min(actual, 13) : actual,
+            updatedBy: "demo",
+            updatedAt: new Date().toISOString(),
+          });
+        })
+      )
+    );
+  }
+
   return db;
 }
 
