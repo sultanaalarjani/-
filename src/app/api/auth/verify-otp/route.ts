@@ -1,21 +1,18 @@
 import { NextResponse } from "next/server";
-import { createSession, getUserByEmail, verifyOtp } from "@/lib/db";
+import { createSession, getUserByPhone, verifyOtp } from "@/lib/db";
 import { SESSION_COOKIE, SESSION_TTL_MS } from "@/lib/session";
 
 export async function POST(req: Request) {
-  const { email, code } = await req.json().catch(() => ({}));
-  const clean = (email || "").trim().toLowerCase();
+  const { phone, code } = await req.json().catch(() => ({}));
+  const clean = (phone || "").toString().trim();
 
-  const user = getUserByEmail(clean);
+  const user = getUserByPhone(clean);
   if (!user || !user.active) {
-    return NextResponse.json({ error: "إيميل غير مصرّح" }, { status: 403 });
+    return NextResponse.json({ error: "رقم غير مصرّح" }, { status: 403 });
   }
 
   if (!verifyOtp(clean, String(code || ""))) {
-    return NextResponse.json(
-      { error: "الرمز غير صحيح أو منتهي" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "الرمز غير صحيح أو منتهي" }, { status: 400 });
   }
 
   const token = createSession(user.id, SESSION_TTL_MS);
@@ -23,8 +20,6 @@ export async function POST(req: Request) {
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    // كوكي آمن فقط عند استخدام HTTPS. للتشغيل الداخلي عبر HTTP يبقى معطّلًا.
-    // فعّله بوضع COOKIE_SECURE=true في ملف .env إذا ربطت النظام بـ HTTPS.
     secure: process.env.COOKIE_SECURE === "true",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,

@@ -7,7 +7,8 @@ export type Role = "admin" | "manager";
 
 export interface User {
   id: string;
-  email: string;
+  phone: string; // رقم الجوال (معرّف الدخول)
+  email?: string; // اختياري
   name: string;
   role: Role;
   active: boolean;
@@ -17,9 +18,19 @@ export interface User {
 }
 
 export interface Otp {
-  email: string;
+  phone: string;
   code: string;
   expiresAt: number;
+}
+
+// توحيد صيغة رقم الجوال السعودي إلى صيغة موحّدة 9665XXXXXXXX
+export function normalizePhone(input: string): string {
+  let p = (input || "").replace(/[\s\-()]/g, "").replace(/^\+/, "");
+  if (p.startsWith("00")) p = p.slice(2);
+  if (p.startsWith("0")) p = "966" + p.slice(1); // 05X… → 9665X…
+  else if (p.startsWith("5") && p.length === 9) p = "966" + p; // 5XXXXXXXX
+  else if (!p.startsWith("966") && p.length === 9) p = "966" + p;
+  return p;
 }
 
 export interface Session {
@@ -156,15 +167,14 @@ const DEFAULT_PERIODS = [
 // ===== التهيئة =====
 let seeded = false;
 function seed(db: DBShape): DBShape {
-  const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com")
-    .trim()
-    .toLowerCase();
+  const adminPhone = normalizePhone(process.env.ADMIN_PHONE || "0500000000");
   const adminName = process.env.ADMIN_NAME || "مدير إدارة عمليات الأداء";
 
-  if (!db.users.some((u) => u.email === adminEmail)) {
+  if (!db.users.some((u) => u.phone === adminPhone)) {
     db.users.push({
       id: newId(),
-      email: adminEmail,
+      phone: adminPhone,
+      email: process.env.ADMIN_EMAIL,
       name: adminName,
       role: "admin",
       active: true,
@@ -242,25 +252,29 @@ export function getUserById(id: string): User | undefined {
   return getDB().users.find((u) => u.id === id);
 }
 
-export function getUserByEmail(email: string): User | undefined {
-  return getDB().users.find((u) => u.email === email.trim().toLowerCase());
+export function getUserByPhone(phone: string): User | undefined {
+  const p = normalizePhone(phone);
+  return getDB().users.find((u) => u.phone === p);
 }
 
 export function createUser(input: {
-  email: string;
+  phone: string;
   name: string;
   role: Role;
   sectorIds?: string[];
 }): User {
   const db = getDB();
-  const email = input.email.trim().toLowerCase();
-  if (db.users.some((u) => u.email === email)) {
-    throw new Error("هذا الإيميل مضاف مسبقًا");
+  const phone = normalizePhone(input.phone);
+  if (!phone || phone.length < 10) {
+    throw new Error("رقم جوال غير صحيح");
+  }
+  if (db.users.some((u) => u.phone === phone)) {
+    throw new Error("هذا الرقم مضاف مسبقًا");
   }
   const user: User = {
     id: newId(),
-    email,
-    name: input.name.trim() || email,
+    phone,
+    name: input.name.trim() || phone,
     role: input.role,
     active: true,
     createdAt: new Date().toISOString(),
@@ -291,22 +305,22 @@ export function deleteUser(id: string) {
 }
 
 // ===== رموز الدخول (OTP) =====
-export function setOtp(email: string, code: string, ttlMs: number) {
+export function setOtp(phone: string, code: string, ttlMs: number) {
   const db = getDB();
-  const e = email.trim().toLowerCase();
-  db.otps = db.otps.filter((o) => o.email !== e);
-  db.otps.push({ email: e, code, expiresAt: Date.now() + ttlMs });
+  const p = normalizePhone(phone);
+  db.otps = db.otps.filter((o) => o.phone !== p);
+  db.otps.push({ phone: p, code, expiresAt: Date.now() + ttlMs });
   save(db);
 }
 
-export function verifyOtp(email: string, code: string): boolean {
+export function verifyOtp(phone: string, code: string): boolean {
   const db = getDB();
-  const e = email.trim().toLowerCase();
-  const otp = db.otps.find((o) => o.email === e);
+  const p = normalizePhone(phone);
+  const otp = db.otps.find((o) => o.phone === p);
   if (!otp) return false;
   const ok = otp.code === code.trim() && otp.expiresAt > Date.now();
   if (ok) {
-    db.otps = db.otps.filter((o) => o.email !== e);
+    db.otps = db.otps.filter((o) => o.phone !== p);
     save(db);
   }
   return ok;

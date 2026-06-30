@@ -15,13 +15,13 @@ export async function POST(req: Request) {
   if (!user || user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  const { email, name, role, sectorIds } = await req.json().catch(() => ({}));
-  if (!email || !String(email).includes("@")) {
-    return NextResponse.json({ error: "أدخل إيميل صحيح" }, { status: 400 });
+  const { phone, name, role, sectorIds } = await req.json().catch(() => ({}));
+  if (!phone || String(phone).replace(/\D/g, "").length < 9) {
+    return NextResponse.json({ error: "أدخل رقم جوال صحيح" }, { status: 400 });
   }
   try {
     const created = createUser({
-      email,
+      phone,
       name: name || "",
       role: role === "admin" ? "admin" : "manager",
       sectorIds: Array.isArray(sectorIds) ? sectorIds : [],

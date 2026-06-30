@@ -8,7 +8,7 @@ export async function GET() {
     user: {
       id: user.id,
       name: user.name,
-      email: user.email,
+      phone: user.phone,
       role: user.role,
       sectorIds: user.sectorIds || [],
     },

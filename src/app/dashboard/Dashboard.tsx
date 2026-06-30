@@ -10,7 +10,7 @@ type Unit = "percent" | "number";
 interface Me {
   id: string;
   name: string;
-  email: string;
+  phone: string;
   role: Role;
   sectorIds: string[];
 }
@@ -1070,7 +1070,7 @@ function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => v
 /* ============ المدراء والصلاحيات ============ */
 interface UserRow {
   id: string;
-  email: string;
+  phone: string;
   name: string;
   role: Role;
   active: boolean;
@@ -1078,7 +1078,7 @@ interface UserRow {
 }
 function UsersManager({ refData }: { refData: RefData }) {
   const [users, setUsers] = useState<UserRow[]>([]);
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("manager");
   const [sectorIds, setSectorIds] = useState<string[]>([]);
@@ -1104,13 +1104,13 @@ function UsersManager({ refData }: { refData: RefData }) {
     const res = await fetch("/api/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, name, role, sectorIds: role === "manager" ? sectorIds : [] }),
+      body: JSON.stringify({ phone, name, role, sectorIds: role === "manager" ? sectorIds : [] }),
     });
     const d = await res.json();
     if (!res.ok) setErr(d.error || "خطأ");
     else {
       setMsg(`تمت إضافة ${d.user.name} ✓`);
-      setEmail("");
+      setPhone("");
       setName("");
       setRole("manager");
       setSectorIds([]);
@@ -1167,13 +1167,15 @@ function UsersManager({ refData }: { refData: RefData }) {
         <form onSubmit={add}>
           <div className="row">
             <div>
-              <label>إيميل الدوام</label>
+              <label>رقم الجوال</label>
               <input
-                type="email"
-                value={email}
+                type="tel"
+                inputMode="tel"
+                placeholder="05XXXXXXXX"
+                value={phone}
                 dir="ltr"
                 style={{ textAlign: "left" }}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => setPhone(e.target.value)}
                 required
               />
             </div>
@@ -1213,7 +1215,7 @@ function UsersManager({ refData }: { refData: RefData }) {
         <thead>
           <tr>
             <th>الاسم</th>
-            <th>الإيميل</th>
+            <th>رقم الجوال</th>
             <th>الصلاحية</th>
             <th>القطاعات</th>
             <th>الحالة</th>
@@ -1225,7 +1227,7 @@ function UsersManager({ refData }: { refData: RefData }) {
             <tr key={u.id}>
               <td>{u.name}</td>
               <td dir="ltr" style={{ textAlign: "right" }}>
-                {u.email}
+                {u.phone}
               </td>
               <td>
                 <span className={`badge ${u.role === "admin" ? "badge-admin" : "badge-manager"}`}>
