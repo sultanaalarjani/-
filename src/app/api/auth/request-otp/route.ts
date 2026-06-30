@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "أدخل رقم جوال صحيح" }, { status: 400 });
   }
 
-  const user = getUserByPhone(clean);
+  const user = await getUserByPhone(clean);
   if (!user || !user.active) {
     return NextResponse.json(
       { error: "هذا الرقم غير مصرّح له بالدخول. تواصل مع مدير الإدارة." },
@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   }
 
   const code = String(Math.floor(100000 + Math.random() * 900000));
-  setOtp(clean, code, OTP_TTL_MS);
+  await setOtp(clean, code, OTP_TTL_MS);
 
   try {
     const result = await sendOtpSms(clean, code);

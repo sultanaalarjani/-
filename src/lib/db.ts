@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { Pool } from "pg";
 
 // ===== الأنواع =====
 export type Role = "admin" | "manager";
@@ -13,7 +14,6 @@ export interface User {
   role: Role;
   active: boolean;
   createdAt: string;
-  // القطاعات التي يديرها المدير (للمدراء فقط). مدير الإدارة يرى كل القطاعات.
   sectorIds: string[];
 }
 
@@ -27,8 +27,8 @@ export interface Otp {
 export function normalizePhone(input: string): string {
   let p = (input || "").replace(/[\s\-()]/g, "").replace(/^\+/, "");
   if (p.startsWith("00")) p = p.slice(2);
-  if (p.startsWith("0")) p = "966" + p.slice(1); // 05X… → 9665X…
-  else if (p.startsWith("5") && p.length === 9) p = "966" + p; // 5XXXXXXXX
+  if (p.startsWith("0")) p = "966" + p.slice(1);
+  else if (p.startsWith("5") && p.length === 9) p = "966" + p;
   else if (!p.startsWith("966") && p.length === 9) p = "966" + p;
   return p;
 }
@@ -61,7 +61,6 @@ export interface Period {
   order: number;
 }
 
-// قياس لكل (قطاع × مؤشر × ربع)
 export interface Measurement {
   id: string;
   sectorId: string;
@@ -74,8 +73,8 @@ export interface Measurement {
 }
 
 export interface Settings {
-  goodThreshold: number; // حد التعثر الجزئي (أصفر)
-  excellentThreshold: number; // حد "وفق المسار" (أخضر)
+  goodThreshold: number;
+  excellentThreshold: number;
 }
 
 interface DBShape {
@@ -109,27 +108,63 @@ export function newId(): string {
   return crypto.randomBytes(9).toString("hex");
 }
 
+// ===== الخلفية: Postgres إذا توفّر DATABASE_URL، وإلا ملف محلي =====
+const USE_PG = !!process.env.DATABASE_URL;
+let pool: Pool | null = null;
+let pgReady: Promise<void> | null = null;
+
+function getPool(): Pool {
+  if (!pool) {
+    const url = process.env.DATABASE_URL || "";
+    const isLocal = /localhost|127\.0\.0\.1/.test(url);
+    pool = new Pool({
+      connectionString: url,
+      ssl: isLocal ? false : { rejectUnauthorized: false },
+      max: 3,
+    });
+  }
+  return pool;
+}
+
+async function ensurePg() {
+  if (!pgReady) {
+    pgReady = getPool()
+      .query("CREATE TABLE IF NOT EXISTS app_state (id int PRIMARY KEY, data jsonb NOT NULL)")
+      .then(() => undefined);
+  }
+  return pgReady;
+}
+
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-function load(): DBShape {
-  ensureDir();
-  if (!fs.existsSync(DB_FILE)) {
-    const db = defaultDB();
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-    return db;
+async function loadRaw(): Promise<DBShape | null> {
+  if (USE_PG) {
+    await ensurePg();
+    const res = await getPool().query("SELECT data FROM app_state WHERE id = 1");
+    if (res.rows.length === 0) return null;
+    return { ...defaultDB(), ...(res.rows[0].data as Partial<DBShape>) };
   }
+  ensureDir();
+  if (!fs.existsSync(DB_FILE)) return null;
   try {
-    const raw = fs.readFileSync(DB_FILE, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<DBShape>;
+    const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf-8")) as Partial<DBShape>;
     return { ...defaultDB(), ...parsed };
   } catch {
     return defaultDB();
   }
 }
 
-function save(db: DBShape) {
+async function save(db: DBShape): Promise<void> {
+  if (USE_PG) {
+    await ensurePg();
+    await getPool().query(
+      "INSERT INTO app_state (id, data) VALUES (1, $1::jsonb) ON CONFLICT (id) DO UPDATE SET data = $1::jsonb",
+      [JSON.stringify(db)]
+    );
+    return;
+  }
   ensureDir();
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
@@ -165,7 +200,6 @@ const DEFAULT_PERIODS = [
 ];
 
 // ===== التهيئة =====
-let seeded = false;
 function seed(db: DBShape): DBShape {
   const adminPhone = normalizePhone(process.env.ADMIN_PHONE || "0500000000");
   const adminName = process.env.ADMIN_NAME || "مدير إدارة عمليات الأداء";
@@ -189,7 +223,6 @@ function seed(db: DBShape): DBShape {
   if (db.sectors.length === 0) {
     db.sectors = DEFAULT_SECTORS.map((name, i) => ({ id: newId(), name, order: i + 1 }));
   }
-
   if (db.indicators.length === 0) {
     db.indicators = DEFAULT_INDICATORS.map((ind, i) => ({
       id: newId(),
@@ -199,19 +232,16 @@ function seed(db: DBShape): DBShape {
       order: i + 1,
     }));
   }
-
   if (db.periods.length === 0) {
     db.periods = DEFAULT_PERIODS.map((label, i) => ({ id: newId(), label, order: i + 1 }));
   }
 
-  // بيانات تجريبية للعرض فقط (SEED_DEMO=true) — قيم ثابتة بلا عشوائية
   if (process.env.SEED_DEMO === "true" && db.measurements.length === 0) {
     db.sectors.forEach((s, si) =>
       db.indicators.forEach((ind, ii) =>
         db.periods.forEach((p, pi) => {
           const isNum = ind.unit === "number";
           const target = isNum ? 10 : 100;
-          // قيمة محققة متنوّعة (تتحسّن عبر الأرباع قليلًا) بدون عشوائية
           const base = isNum ? 10 : 100;
           const variance = ((si * 7 + ii * 13 + pi * 5) % 6) * (isNum ? 1 : 8);
           const actual = Math.max(0, base - variance + pi * (isNum ? 0 : 2));
@@ -229,48 +259,48 @@ function seed(db: DBShape): DBShape {
       )
     );
   }
-
   return db;
 }
 
-function getDB(): DBShape {
-  const db = load();
-  if (!seeded) {
-    seed(db);
-    save(db);
-    seeded = true;
+let initOnce: Promise<void> | null = null;
+async function getDB(): Promise<DBShape> {
+  const existing = await loadRaw();
+  if (existing) return existing;
+  // أول تشغيل: تهيئة وحفظ (مرة واحدة)
+  if (!initOnce) {
+    initOnce = (async () => {
+      const db = seed(defaultDB());
+      await save(db);
+    })();
   }
-  return db;
+  await initOnce;
+  return (await loadRaw()) || seed(defaultDB());
 }
 
 // ===== المستخدمون =====
-export function listUsers(): User[] {
-  return getDB().users.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+export async function listUsers(): Promise<User[]> {
+  return (await getDB()).users.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export function getUserById(id: string): User | undefined {
-  return getDB().users.find((u) => u.id === id);
+export async function getUserById(id: string): Promise<User | undefined> {
+  return (await getDB()).users.find((u) => u.id === id);
 }
 
-export function getUserByPhone(phone: string): User | undefined {
+export async function getUserByPhone(phone: string): Promise<User | undefined> {
   const p = normalizePhone(phone);
-  return getDB().users.find((u) => u.phone === p);
+  return (await getDB()).users.find((u) => u.phone === p);
 }
 
-export function createUser(input: {
+export async function createUser(input: {
   phone: string;
   name: string;
   role: Role;
   sectorIds?: string[];
-}): User {
-  const db = getDB();
+}): Promise<User> {
+  const db = await getDB();
   const phone = normalizePhone(input.phone);
-  if (!phone || phone.length < 10) {
-    throw new Error("رقم جوال غير صحيح");
-  }
-  if (db.users.some((u) => u.phone === phone)) {
-    throw new Error("هذا الرقم مضاف مسبقًا");
-  }
+  if (!phone || phone.length < 10) throw new Error("رقم جوال غير صحيح");
+  if (db.users.some((u) => u.phone === phone)) throw new Error("هذا الرقم مضاف مسبقًا");
   const user: User = {
     id: newId(),
     phone,
@@ -281,115 +311,113 @@ export function createUser(input: {
     sectorIds: input.role === "manager" ? input.sectorIds || [] : [],
   };
   db.users.push(user);
-  save(db);
+  await save(db);
   return user;
 }
 
-export function updateUser(
+export async function updateUser(
   id: string,
   patch: { active?: boolean; sectorIds?: string[]; name?: string }
-) {
-  const db = getDB();
+): Promise<void> {
+  const db = await getDB();
   const u = db.users.find((x) => x.id === id);
   if (!u) return;
   if (typeof patch.active === "boolean") u.active = patch.active;
   if (Array.isArray(patch.sectorIds)) u.sectorIds = patch.sectorIds;
   if (typeof patch.name === "string" && patch.name.trim()) u.name = patch.name.trim();
-  save(db);
+  await save(db);
 }
 
-export function deleteUser(id: string) {
-  const db = getDB();
+export async function deleteUser(id: string): Promise<void> {
+  const db = await getDB();
   db.users = db.users.filter((u) => u.id !== id);
-  save(db);
+  await save(db);
 }
 
 // ===== رموز الدخول (OTP) =====
-export function setOtp(phone: string, code: string, ttlMs: number) {
-  const db = getDB();
+export async function setOtp(phone: string, code: string, ttlMs: number): Promise<void> {
+  const db = await getDB();
   const p = normalizePhone(phone);
   db.otps = db.otps.filter((o) => o.phone !== p);
   db.otps.push({ phone: p, code, expiresAt: Date.now() + ttlMs });
-  save(db);
+  await save(db);
 }
 
-export function verifyOtp(phone: string, code: string): boolean {
-  const db = getDB();
+export async function verifyOtp(phone: string, code: string): Promise<boolean> {
+  const db = await getDB();
   const p = normalizePhone(phone);
   const otp = db.otps.find((o) => o.phone === p);
   if (!otp) return false;
   const ok = otp.code === code.trim() && otp.expiresAt > Date.now();
   if (ok) {
     db.otps = db.otps.filter((o) => o.phone !== p);
-    save(db);
+    await save(db);
   }
   return ok;
 }
 
 // ===== الجلسات =====
-export function createSession(userId: string, ttlMs: number): string {
-  const db = getDB();
+export async function createSession(userId: string, ttlMs: number): Promise<string> {
+  const db = await getDB();
   const token = crypto.randomBytes(24).toString("hex");
   db.sessions = db.sessions.filter((s) => s.expiresAt > Date.now());
   db.sessions.push({ token, userId, expiresAt: Date.now() + ttlMs });
-  save(db);
+  await save(db);
   return token;
 }
 
-export function getSessionUser(token: string | undefined): User | undefined {
+export async function getSessionUser(token: string | undefined): Promise<User | undefined> {
   if (!token) return undefined;
-  const db = getDB();
+  const db = await getDB();
   const s = db.sessions.find((x) => x.token === token);
   if (!s || s.expiresAt < Date.now()) return undefined;
   return db.users.find((u) => u.id === s.userId && u.active);
 }
 
-export function destroySession(token: string | undefined) {
+export async function destroySession(token: string | undefined): Promise<void> {
   if (!token) return;
-  const db = getDB();
+  const db = await getDB();
   db.sessions = db.sessions.filter((s) => s.token !== token);
-  save(db);
+  await save(db);
 }
 
 // ===== القطاعات =====
 const MAX_SECTORS = 7;
 
-export function listSectors(): Sector[] {
-  return getDB().sectors.sort((a, b) => a.order - b.order);
+export async function listSectors(): Promise<Sector[]> {
+  return (await getDB()).sectors.sort((a, b) => a.order - b.order);
 }
 
-export function getSector(id: string): Sector | undefined {
-  return getDB().sectors.find((s) => s.id === id);
+export async function getSector(id: string): Promise<Sector | undefined> {
+  return (await getDB()).sectors.find((s) => s.id === id);
 }
 
-export function createSector(name: string): Sector {
-  const db = getDB();
-  if (db.sectors.length >= MAX_SECTORS) {
-    throw new Error(`الحد الأقصى ${MAX_SECTORS} قطاعات`);
-  }
+export async function createSector(name: string): Promise<Sector> {
+  const db = await getDB();
+  if (db.sectors.length >= MAX_SECTORS) throw new Error(`الحد الأقصى ${MAX_SECTORS} قطاعات`);
   const sector: Sector = { id: newId(), name: name.trim(), order: db.sectors.length + 1 };
   db.sectors.push(sector);
-  save(db);
+  await save(db);
   return sector;
 }
 
-export function updateSector(id: string, name: string) {
-  const db = getDB();
+export async function updateSector(id: string, name: string): Promise<void> {
+  const db = await getDB();
   const s = db.sectors.find((x) => x.id === id);
   if (s && name.trim()) {
     s.name = name.trim();
-    save(db);
+    await save(db);
   }
 }
 
-export function deleteSector(id: string) {
-  const db = getDB();
+export async function deleteSector(id: string): Promise<void> {
+  const db = await getDB();
   db.measurements = db.measurements.filter((m) => m.sectorId !== id);
   db.sectors = db.sectors.filter((s) => s.id !== id);
   db.users.forEach((u) => {
     u.sectorIds = (u.sectorIds || []).filter((sid) => sid !== id);
   });
-  save(db);
+  await save(db);
 }
 
 // ===== المؤشرات =====
@@ -400,13 +428,13 @@ export type IndicatorInput = {
   active: boolean;
 };
 
-export function listIndicators(includeInactive = false): Indicator[] {
-  const all = getDB().indicators.sort((a, b) => a.order - b.order);
+export async function listIndicators(includeInactive = false): Promise<Indicator[]> {
+  const all = (await getDB()).indicators.sort((a, b) => a.order - b.order);
   return includeInactive ? all : all.filter((i) => i.active);
 }
 
-export function saveIndicators(items: IndicatorInput[]): Indicator[] {
-  const db = getDB();
+export async function saveIndicators(items: IndicatorInput[]): Promise<Indicator[]> {
+  const db = await getDB();
   db.indicators = items
     .filter((i) => i.name.trim())
     .map((i, idx) => ({
@@ -418,82 +446,61 @@ export function saveIndicators(items: IndicatorInput[]): Indicator[] {
     }));
   const ids = new Set(db.indicators.map((i) => i.id));
   db.measurements = db.measurements.filter((m) => ids.has(m.indicatorId));
-  save(db);
+  await save(db);
   return db.indicators;
 }
 
 // ===== الفترات =====
-export function listPeriods(): Period[] {
-  return getDB().periods.sort((a, b) => a.order - b.order);
+export async function listPeriods(): Promise<Period[]> {
+  return (await getDB()).periods.sort((a, b) => a.order - b.order);
 }
 
-export function createPeriod(label: string): Period {
-  const db = getDB();
+export async function createPeriod(label: string): Promise<Period> {
+  const db = await getDB();
   const period: Period = { id: newId(), label: label.trim(), order: db.periods.length + 1 };
   db.periods.push(period);
-  save(db);
+  await save(db);
   return period;
 }
 
-export function updatePeriod(id: string, label: string) {
-  const db = getDB();
+export async function updatePeriod(id: string, label: string): Promise<void> {
+  const db = await getDB();
   const p = db.periods.find((x) => x.id === id);
   if (p && label.trim()) {
     p.label = label.trim();
-    save(db);
+    await save(db);
   }
 }
 
-export function deletePeriod(id: string) {
-  const db = getDB();
+export async function deletePeriod(id: string): Promise<void> {
+  const db = await getDB();
   db.periods = db.periods.filter((p) => p.id !== id);
   db.measurements = db.measurements.filter((m) => m.periodId !== id);
-  save(db);
+  await save(db);
 }
 
-// ===== القياسات (قطاع × مؤشر × ربع) =====
-export function listMeasurements(filter?: {
+// ===== القياسات =====
+export async function listMeasurements(filter?: {
   sectorId?: string;
   periodId?: string;
   sectorIds?: string[];
-}): Measurement[] {
-  let list = getDB().measurements;
+}): Promise<Measurement[]> {
+  let list = (await getDB()).measurements;
   if (filter?.sectorId) list = list.filter((m) => m.sectorId === filter.sectorId);
   if (filter?.periodId) list = list.filter((m) => m.periodId === filter.periodId);
   if (filter?.sectorIds) list = list.filter((m) => filter.sectorIds!.includes(m.sectorId));
   return list;
 }
 
-// ===== الإعدادات =====
-export function getSettings(): Settings {
-  const s = getDB().settings;
-  return {
-    goodThreshold: typeof s?.goodThreshold === "number" ? s.goodThreshold : 80,
-    excellentThreshold: typeof s?.excellentThreshold === "number" ? s.excellentThreshold : 100,
-  };
-}
-
-export function updateSettings(patch: Partial<Settings>): Settings {
-  const db = getDB();
-  const cur = db.settings || { goodThreshold: 80, excellentThreshold: 100 };
-  if (typeof patch.goodThreshold === "number" && patch.goodThreshold >= 0)
-    cur.goodThreshold = patch.goodThreshold;
-  if (typeof patch.excellentThreshold === "number" && patch.excellentThreshold >= 0)
-    cur.excellentThreshold = patch.excellentThreshold;
-  db.settings = cur;
-  save(db);
-  return cur;
-}
-
-export function upsertMeasurement(input: {
+export async function upsertMeasurement(input: {
   sectorId: string;
   indicatorId: string;
   periodId: string;
   target: number | null;
   actual: number | null;
   updatedBy: string;
-}): Measurement {
-  const db = getDB();
+}): Promise<Measurement> {
+  const db = await getDB();
   let m = db.measurements.find(
     (x) =>
       x.sectorId === input.sectorId &&
@@ -518,6 +525,27 @@ export function upsertMeasurement(input: {
     };
     db.measurements.push(m);
   }
-  save(db);
+  await save(db);
   return m;
+}
+
+// ===== الإعدادات =====
+export async function getSettings(): Promise<Settings> {
+  const s = (await getDB()).settings;
+  return {
+    goodThreshold: typeof s?.goodThreshold === "number" ? s.goodThreshold : 80,
+    excellentThreshold: typeof s?.excellentThreshold === "number" ? s.excellentThreshold : 100,
+  };
+}
+
+export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
+  const db = await getDB();
+  const cur = db.settings || { goodThreshold: 80, excellentThreshold: 100 };
+  if (typeof patch.goodThreshold === "number" && patch.goodThreshold >= 0)
+    cur.goodThreshold = patch.goodThreshold;
+  if (typeof patch.excellentThreshold === "number" && patch.excellentThreshold >= 0)
+    cur.excellentThreshold = patch.excellentThreshold;
+  db.settings = cur;
+  await save(db);
+  return cur;
 }

@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/session";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
-  return NextResponse.json({ sectors: listSectors() });
+  return NextResponse.json({ sectors: await listSectors() });
 }
 
 export async function POST(req: Request) {
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "أدخل اسم القطاع" }, { status: 400 });
   }
   try {
-    const sector = createSector(String(name));
+    const sector = await createSector(String(name));
     return NextResponse.json({ ok: true, sector });
   } catch (e) {
     return NextResponse.json(

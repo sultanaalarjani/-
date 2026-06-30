@@ -12,7 +12,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!label || !String(label).trim()) {
     return NextResponse.json({ error: "أدخل اسم الفترة" }, { status: 400 });
   }
-  updatePeriod(id, String(label));
+  await updatePeriod(id, String(label));
   return NextResponse.json({ ok: true });
 }
 
@@ -22,6 +22,6 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
   const { id } = await ctx.params;
-  deletePeriod(id);
+  await deletePeriod(id);
   return NextResponse.json({ ok: true });
 }

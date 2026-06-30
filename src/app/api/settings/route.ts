@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/session";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
-  return NextResponse.json({ settings: getSettings() });
+  return NextResponse.json({ settings: await getSettings() });
 }
 
 export async function PUT(req: Request) {
@@ -25,6 +25,6 @@ export async function PUT(req: Request) {
       { status: 400 }
     );
   }
-  const settings = updateSettings({ goodThreshold: g, excellentThreshold: e });
+  const settings = await updateSettings({ goodThreshold: g, excellentThreshold: e });
   return NextResponse.json({ ok: true, settings });
 }

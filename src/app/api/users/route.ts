@@ -7,7 +7,7 @@ export async function GET() {
   if (!user || user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  return NextResponse.json({ users: listUsers() });
+  return NextResponse.json({ users: await listUsers() });
 }
 
 export async function POST(req: Request) {
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "أدخل رقم جوال صحيح" }, { status: 400 });
   }
   try {
-    const created = createUser({
+    const created = await createUser({
       phone,
       name: name || "",
       role: role === "admin" ? "admin" : "manager",

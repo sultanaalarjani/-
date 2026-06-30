@@ -7,7 +7,7 @@ export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 أيام
 export async function getCurrentUser(): Promise<User | undefined> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
-  return getSessionUser(token);
+  return await getSessionUser(token);
 }
 
 export async function requireUser(): Promise<User> {

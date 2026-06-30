@@ -9,7 +9,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
   const { id } = await ctx.params;
   const { active, sectorIds, name } = await req.json().catch(() => ({}));
-  updateUser(id, {
+  await updateUser(id, {
     active: typeof active === "boolean" ? active : undefined,
     sectorIds: Array.isArray(sectorIds) ? sectorIds : undefined,
     name: typeof name === "string" ? name : undefined,
@@ -29,9 +29,9 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
       { status: 400 }
     );
   }
-  if (!getUserById(id)) {
+  if (!(await getUserById(id))) {
     return NextResponse.json({ error: "المستخدم غير موجود" }, { status: 404 });
   }
-  deleteUser(id);
+  await deleteUser(id);
   return NextResponse.json({ ok: true });
 }

@@ -12,7 +12,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!name || !String(name).trim()) {
     return NextResponse.json({ error: "أدخل اسم القطاع" }, { status: 400 });
   }
-  updateSector(id, String(name));
+  await updateSector(id, String(name));
   return NextResponse.json({ ok: true });
 }
 
@@ -22,6 +22,6 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
   const { id } = await ctx.params;
-  deleteSector(id);
+  await deleteSector(id);
   return NextResponse.json({ ok: true });
 }

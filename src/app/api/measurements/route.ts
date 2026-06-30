@@ -21,7 +21,7 @@ export async function GET(req: Request) {
 
   const scope =
     user.role === "admin" ? undefined : { sectorIds: user.sectorIds };
-  let measurements = listMeasurements({ periodId, sectorId, ...scope });
+  let measurements = await listMeasurements({ periodId, sectorId, ...scope });
   if (sectorId) measurements = measurements.filter((m) => m.sectorId === sectorId);
 
   return NextResponse.json({ measurements });
@@ -55,7 +55,7 @@ export async function PUT(req: Request) {
       );
     }
     saved.push(
-      upsertMeasurement({
+      await upsertMeasurement({
         sectorId,
         indicatorId,
         periodId,

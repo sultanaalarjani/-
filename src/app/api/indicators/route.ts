@@ -8,7 +8,7 @@ export async function GET(req: Request) {
   const includeInactive =
     user.role === "admin" &&
     new URL(req.url).searchParams.get("all") === "1";
-  return NextResponse.json({ indicators: listIndicators(includeInactive) });
+  return NextResponse.json({ indicators: await listIndicators(includeInactive) });
 }
 
 export async function PUT(req: Request) {
@@ -28,6 +28,6 @@ export async function PUT(req: Request) {
       unit: (i.unit === "number" ? "number" : "percent") as IndicatorUnit,
       active: i.active !== false,
     }));
-  const saved = saveIndicators(cleaned);
+  const saved = await saveIndicators(cleaned);
   return NextResponse.json({ ok: true, indicators: saved });
 }
