@@ -15,6 +15,6 @@ services:
       # الموقع يعمل عبر HTTPS على Render
       - key: COOKIE_SECURE
         value: "true"
-      # تعبئة بيانات تجريبية تلقائيًا للعرض (اجعلها false للاستخدام الفعلي)
+      # النسخة النهائية: بدون بيانات تجريبية (تبدأ نظيفة وجاهزة للتعديل)
       - key: SEED_DEMO
-        value: "true"
+        value: "false"
