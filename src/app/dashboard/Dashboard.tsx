@@ -148,7 +148,7 @@ export default function Dashboard({ me }: { me: Me }) {
           <>
             {tab === "overview" && <Overview me={me} refData={refData} />}
             {tab === "weekly" && <WeeklyReview me={me} refData={refData} />}
-            {tab === "entry" && <DataEntry me={me} refData={refData} />}
+            {tab === "entry" && <DataEntry me={me} refData={refData} reload={loadRef} />}
             {tab === "structure" && isAdmin && <StructureManager refData={refData} reload={loadRef} />}
             {tab === "users" && isAdmin && <UsersManager refData={refData} />}
           </>
@@ -990,13 +990,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
 }
 
 /* ============ إدخال البيانات ============ */
-function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
+function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const thr = refData.thresholds;
+  const isAdmin = me.role === "admin";
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
-  const [vals, setVals] = useState<Record<string, string>>({});
+  const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1007,34 +1008,57 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       return;
     }
     const d = await fetch(`/api/measurements?sectorId=${sectorId}&periodId=${periodId}`).then((r) => r.json());
-    const map: Record<string, string> = {};
+    const actualMap: Record<string, string> = {};
     for (const m of (d.measurements || []) as Measurement[]) {
-      map[m.indicatorId] = m.actual != null ? String(m.actual) : "";
+      actualMap[m.indicatorId] = m.actual != null ? String(m.actual) : "";
+    }
+    const map: Record<string, { target: string; actual: string }> = {};
+    for (const ind of indicators) {
+      const t = refData.targets[tkey(sectorId, ind.id)];
+      map[ind.id] = { target: t != null ? String(t) : "", actual: actualMap[ind.id] ?? "" };
     }
     setVals(map);
-  }, [sectorId, periodId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectorId, periodId, refData.targets]);
 
   useEffect(() => {
     loadVals();
   }, [loadVals]);
 
-  function setVal(indId: string, v: string) {
-    setVals((s) => ({ ...s, [indId]: v }));
+  function setVal(indId: string, key: "target" | "actual", v: string) {
+    setVals((s) => ({ ...s, [indId]: { ...(s[indId] || { target: "", actual: "" }), [key]: v } }));
   }
-
-  const targetOf = (indId: string): number | null => refData.targets[tkey(sectorId, indId)] ?? null;
 
   async function save() {
     setErr("");
     setMsg("");
     setLoading(true);
     try {
+      // 1) المستهدفات (سنوية) — دمج مع باقي القطاعات حتى لا تُمحى
+      if (isAdmin) {
+        const merged: Record<string, number> = { ...refData.targets };
+        for (const ind of indicators) {
+          const tv = vals[ind.id]?.target ?? "";
+          const key = tkey(sectorId, ind.id);
+          if (tv === "") delete merged[key];
+          else {
+            const n = Number(tv);
+            if (Number.isFinite(n) && n >= 0) merged[key] = n;
+          }
+        }
+        await fetch("/api/targets", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ targets: merged }),
+        });
+      }
+      // 2) المنجز (هذا الأسبوع)
       const items = indicators.map((ind) => ({
         sectorId,
         indicatorId: ind.id,
         periodId,
-        target: targetOf(ind.id) ?? "",
-        actual: vals[ind.id] ?? "",
+        target: vals[ind.id]?.target ?? "",
+        actual: vals[ind.id]?.actual ?? "",
       }));
       const res = await fetch("/api/measurements", {
         method: "PUT",
@@ -1043,7 +1067,10 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       });
       const data = await res.json();
       if (!res.ok) setErr(data.error || "تعذّر الحفظ");
-      else setMsg("تم حفظ المنجز بنجاح ✓");
+      else {
+        setMsg("تم الحفظ بنجاح ✓");
+        reload();
+      }
     } finally {
       setLoading(false);
     }
@@ -1058,10 +1085,9 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال المنجز الأسبوعي</h2>
+      <h2 className="section-title">إدخال المستهدف والمنجز</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        اختر القطاع والأسبوع، ثم أدخل عدد الجهات المنجزة لكل مؤشر. المستهدف ثابت للسنة (يُضبط من
-        {me.role === "admin" ? " الهيكل ← المستهدفات" : " قِبل مدير الإدارة"}).
+        اختر القطاع والأسبوع، ثم عبّئ المستهدف السنوي والمنجز لهذا الأسبوع لكل مؤشر (عدد الجهات).
       </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
@@ -1089,54 +1115,55 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <thead>
-            <tr>
-              <th style={{ minWidth: 280 }}>المؤشر</th>
-              <th>المستهدف (ثابت)</th>
-              <th>المنجز هذا الأسبوع</th>
-              <th>نسبة الإنجاز</th>
-            </tr>
-          </thead>
-          <tbody>
-            {indicators.map((ind, i) => {
-              const tgt = targetOf(ind.id);
-              const av = vals[ind.id] ?? "";
-              const r = evaluate(av === "" ? null : Number(av), tgt, thr);
-              return (
-                <tr key={ind.id}>
-                  <td>
-                    <strong>م{i + 1}.</strong> {ind.name}
-                  </td>
-                  <td style={{ width: 120, textAlign: "center" }}>
-                    <span className="muted" style={{ fontWeight: 700 }}>
-                      {tgt != null ? fmtNum(tgt) : "—"}
-                    </span>
-                  </td>
-                  <td style={{ width: 130 }}>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={av}
-                      onChange={(e) => setVal(ind.id, e.target.value)}
-                    />
-                  </td>
-                  <td style={{ textAlign: "center" }}>
-                    <span className="badge" style={{ background: r.color, color: r.text }}>
-                      {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "—"}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="entry-cards">
+        {indicators.map((ind, i) => {
+          const tv = vals[ind.id]?.target ?? "";
+          const av = vals[ind.id]?.actual ?? "";
+          const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), thr);
+          return (
+            <div className="entry-card" key={ind.id}>
+              <div className="ec-title">
+                <span className="ec-num">م{i + 1}</span>
+                {ind.name}
+              </div>
+              <div className="ec-boxes">
+                <div className="ec-box">
+                  <label>المستهدف</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="—"
+                    value={tv}
+                    disabled={!isAdmin}
+                    title={isAdmin ? "" : "يُضبط من قِبل مدير الإدارة"}
+                    onChange={(e) => setVal(ind.id, "target", e.target.value)}
+                  />
+                </div>
+                <div className="ec-box">
+                  <label>المنجز</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="—"
+                    value={av}
+                    onChange={(e) => setVal(ind.id, "actual", e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="ec-status">
+                <span className="badge" style={{ background: r.color, color: r.text }}>
+                  {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "لم يُعبّأ"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div style={{ marginTop: 16 }}>
+      <div style={{ marginTop: 18 }}>
         <button className="btn" onClick={save} disabled={loading}>
-          {loading ? "جارٍ الحفظ..." : "حفظ المنجز"}
+          {loading ? "جارٍ الحفظ..." : "حفظ"}
         </button>
       </div>
     </div>
