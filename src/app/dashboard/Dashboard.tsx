@@ -658,88 +658,63 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     return m;
   }, [measurements]);
 
-  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
-  const achOf = (sId: string, iId: string, pId: string) => {
-    const m = mMap.get(mkey(sId, iId, pId));
-    return evaluate(m?.actual, m?.target).achievement;
-  };
-
-  const indRows = useMemo(
-    () =>
-      indicators.map((ind, i) => {
-        const perSector = sectors.map((s) => {
-          const m = mMap.get(mkey(s.id, ind.id, periodId));
-          const target = refData.targets[tkey(s.id, ind.id)] ?? m?.target ?? null;
-          return {
-            sector: s,
-            v: evaluate(m?.actual, target).achievement,
-            actual: m?.actual ?? null,
-            target,
-          };
-        });
-        const vals = perSector.map((x) => x.v).filter((v): v is number => v != null);
-        const a = avg(vals);
-        const sumA = perSector.reduce((t, ps) => (ps.actual != null ? t + ps.actual : t), 0);
-        const sumT = perSector.reduce((t, ps) => (ps.target != null ? t + ps.target : t), 0);
-        return {
-          ind,
-          num: i + 1,
-          perSector,
-          value: a == null ? null : Math.round(a),
-          status: perfStatus(a, thr),
-          sumA,
-          sumT,
-        };
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [indicators, sectors, periodId, mMap, thr]
+  // الأسابيع حتى الأسبوع المختار (لحساب التراكمي)
+  const periodsSorted = useMemo(
+    () => [...refData.periods].sort((a, b) => a.order - b.order),
+    [refData.periods]
   );
+  const curOrder = refData.periods.find((p) => p.id === periodId)?.order ?? 0;
 
+  // جهات هذا الأسبوع + التراكمي حتى الآن لكل (قطاع×مؤشر)
+  const indRows = useMemo(() => {
+    const weeksUpTo = periodsSorted.filter((p) => p.order <= curOrder);
+    const cumOf = (sId: string, iId: string) =>
+      weeksUpTo.reduce((t, p) => {
+        const a = mMap.get(mkey(sId, iId, p.id))?.actual;
+        return a != null ? t + a : t;
+      }, 0);
+    return indicators.map((ind, i) => {
+      const perSector = sectors.map((s) => {
+        const target = refData.targets[tkey(s.id, ind.id)] ?? null;
+        const week = mMap.get(mkey(s.id, ind.id, periodId))?.actual ?? null; // جهات هذا الأسبوع
+        const cum = cumOf(s.id, ind.id); // التراكمي حتى الآن
+        const status =
+          target && target > 0 ? perfStatus((cum / target) * 100, thr) : ("none" as const);
+        return { sector: s, week, cum, target, status };
+      });
+      const weekSum = perSector.reduce((t, ps) => (ps.week != null ? t + ps.week : t), 0);
+      const cumSum = perSector.reduce((t, ps) => t + ps.cum, 0);
+      const tgtSum = perSector.reduce((t, ps) => (ps.target != null ? t + ps.target : t), 0);
+      const rowStatus = tgtSum > 0 ? perfStatus((cumSum / tgtSum) * 100, thr) : ("none" as const);
+      return { ind, num: i + 1, perSector, weekSum, cumSum, tgtSum, rowStatus };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicators, sectors, periodId, curOrder, mMap, thr, refData.targets, periodsSorted]);
+
+  // عدّ الخلايا حسب حالة التقدّم التراكمي
   const counts = { excellent: 0, good: 0, weak: 0 };
-  indRows.forEach((r) => {
-    if (r.status === "excellent" || r.status === "good" || r.status === "weak") counts[r.status]++;
-  });
-  const overallVals = indRows.filter((r) => r.value != null).map((r) => r.value as number);
-  const overall = overallVals.length ? Math.round(avg(overallVals)!) : null;
-
-  const weakItems: { indicator: string; sector: string; v: number }[] = [];
   for (const r of indRows)
     for (const ps of r.perSector)
-      if (ps.v != null && perfStatus(ps.v, thr) === "weak")
-        weakItems.push({ indicator: r.ind.name, sector: ps.sector.name, v: Math.round(ps.v) });
-  weakItems.sort((a, b) => a.v - b.v);
+      if (ps.status === "excellent" || ps.status === "good" || ps.status === "weak")
+        counts[ps.status]++;
 
-  // إجماليات الأسبوع (عدد الجهات): المنجز مقابل المستهدف
-  let totalActual = 0;
-  let totalTarget = 0;
-  for (const r of indRows)
-    for (const ps of r.perSector) {
-      if (ps.actual != null) totalActual += ps.actual;
-      if (ps.target != null) totalTarget += ps.target;
-    }
-
-  // تحديثات هذا الأسبوع مقارنةً بالأسبوع السابق (ما الذي تغيّر في المنجز)
-  const periodsSorted = [...refData.periods].sort((a, b) => a.order - b.order);
-  const curIdx = periodsSorted.findIndex((p) => p.id === periodId);
-  const prevPeriod = curIdx > 0 ? periodsSorted[curIdx - 1] : null;
-  const updates: { indicator: string; sector: string; from: number | null; to: number; delta: number }[] = [];
-  if (prevPeriod) {
-    for (const ind of indicators)
-      for (const s of sectors) {
-        const cur = mMap.get(mkey(s.id, ind.id, periodId))?.actual ?? null;
-        const prev = mMap.get(mkey(s.id, ind.id, prevPeriod.id))?.actual ?? null;
-        if (cur != null && cur !== prev) {
-          updates.push({
-            indicator: ind.name,
-            sector: s.name,
-            from: prev,
-            to: cur,
-            delta: cur - (prev ?? 0),
-          });
-        }
-      }
-    updates.sort((a, b) => b.delta - a.delta);
+  // إجماليات
+  let weekTotal = 0;
+  let cumTotal = 0;
+  let tgtTotal = 0;
+  for (const r of indRows) {
+    weekTotal += r.weekSum;
+    cumTotal += r.cumSum;
+    tgtTotal += r.tgtSum;
   }
+
+  // أبرز إنجازات هذا الأسبوع (أعلى تغطية جهات هذا الأسبوع)
+  const weekWins: { indicator: string; sector: string; week: number; cum: number; target: number | null }[] = [];
+  for (const r of indRows)
+    for (const ps of r.perSector)
+      if (ps.week != null && ps.week > 0)
+        weekWins.push({ indicator: r.ind.name, sector: ps.sector.name, week: ps.week, cum: ps.cum, target: ps.target });
+  weekWins.sort((a, b) => b.week - a.week);
 
   const periodLabel = refData.periods.find((p) => p.id === periodId)?.label || "";
   const today = new Date().toLocaleDateString("ar-SA-u-nu-latn", {
@@ -793,7 +768,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
         @media print{h2{page-break-after:avoid}tr{page-break-inside:avoid}}
       </style></head><body>
       <h1>تقرير حالة المؤشرات — إدارة عمليات الأداء</h1>
-      <p class="sub">${esc(today)} · الإنجاز العام: ${overall != null ? overall + "%" : "—"}</p>
+      <p class="sub">${esc(today)} · التراكمي/المستهدف: ${fmtNum(cumTotal)} / ${fmtNum(tgtTotal)}</p>
       ${sections}
       <script>window.onload=function(){window.print()}</script>
       </body></html>`;
@@ -839,15 +814,11 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
 
-  const cellColor = (v: number | null) => {
-    if (v == null) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
-    const meta = statusMeta(perfStatus(v, thr));
+  const cellOf = (status: string) => {
+    if (status === "none" || !status) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
+    const meta = statusMeta(status as "excellent" | "good" | "weak");
     return { bg: meta.color, fg: meta.text };
   };
-  const numTxt = (actual: number | null, target: number | null) =>
-    actual == null && target == null
-      ? "—"
-      : `${actual != null ? fmtNum(actual) : "—"} / ${target != null ? fmtNum(target) : "—"}`;
 
   return (
     <div>
@@ -882,10 +853,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* ملخص سريع */}
       <div className="kpis" style={{ marginTop: 14 }}>
         <div className="kpi">
-          <div className="v" style={{ color: "#22d3ee" }} dir="ltr">
-            {fmtNum(totalActual)} / {fmtNum(totalTarget)}
+          <div className="v" style={{ color: "#22d3ee" }}>{fmtNum(weekTotal)}</div>
+          <div className="l">جهات غُطّيت هذا الأسبوع</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: "#a78bfa" }} dir="ltr">
+            {fmtNum(cumTotal)} / {fmtNum(tgtTotal)}
           </div>
-          <div className="l">إجمالي المنجز / المستهدف (عدد الجهات)</div>
+          <div className="l">التراكمي / المستهدف السنوي</div>
         </div>
         <div className="kpi">
           <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
@@ -904,12 +879,12 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* مصفوفة المؤشرات × القطاعات */}
       <div className="card" style={{ marginTop: 16, overflowX: "auto" }}>
         <h2 className="section-title">
-          حالة المؤشرات حسب القطاع
-          {mode === "number" && (
-            <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
-              (الأرقام تعرض عدد الجهات المنجزة)
-            </span>
-          )}
+          كم جهة غطّى كل قطاع هذا الأسبوع
+          <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
+            {mode === "number"
+              ? "(الرقم الكبير: هذا الأسبوع · الصغير: التراكمي / المستهدف السنوي)"
+              : "(النسبة = التراكمي ÷ المستهدف السنوي)"}
+          </span>
         </h2>
         <table className="matrix">
           <thead>
@@ -928,44 +903,45 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                   <span className="muted">م{r.num}.</span> {r.ind.name}
                 </td>
                 {r.perSector.map((ps) => {
-                  const v = ps.v == null ? null : Math.round(ps.v);
-                  const c = cellColor(v);
-                  const txt =
-                    mode === "number"
-                      ? ps.actual != null
-                        ? fmtNum(ps.actual)
-                        : "—"
-                      : v == null
-                      ? "—"
-                      : `${v}%`;
+                  const c = cellOf(ps.status);
+                  const pct = ps.target ? Math.round((ps.cum / ps.target) * 100) : null;
                   return (
                     <td key={ps.sector.id}>
-                      <span
-                        className="cell-pill"
-                        dir={mode === "number" ? "ltr" : undefined}
-                        style={{ background: c.bg, color: c.fg }}
-                      >
-                        {txt}
+                      <span className="cell-pill" dir="ltr" style={{ background: c.bg, color: c.fg }}>
+                        {mode === "number" ? (
+                          <>
+                            <span className="cp-main">{ps.week != null ? fmtNum(ps.week) : "—"}</span>
+                            {ps.target != null && (
+                              <span className="cp-sub">
+                                {fmtNum(ps.cum)}/{fmtNum(ps.target)}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="cp-main">{pct == null ? "—" : `${pct}%`}</span>
+                        )}
                       </span>
                     </td>
                   );
                 })}
                 {(() => {
-                  const c = cellColor(r.value);
-                  const txt =
-                    mode === "number"
-                      ? fmtNum(r.sumA)
-                      : r.value == null
-                      ? "—"
-                      : `${r.value}%`;
+                  const c = cellOf(r.rowStatus);
+                  const pct = r.tgtSum ? Math.round((r.cumSum / r.tgtSum) * 100) : null;
                   return (
                     <td>
-                      <span
-                        className="cell-pill strong"
-                        dir={mode === "number" ? "ltr" : undefined}
-                        style={{ background: c.bg, color: c.fg }}
-                      >
-                        {txt}
+                      <span className="cell-pill strong" dir="ltr" style={{ background: c.bg, color: c.fg }}>
+                        {mode === "number" ? (
+                          <>
+                            <span className="cp-main">{fmtNum(r.weekSum)}</span>
+                            {r.tgtSum > 0 && (
+                              <span className="cp-sub">
+                                {fmtNum(r.cumSum)}/{fmtNum(r.tgtSum)}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="cp-main">{pct == null ? "—" : `${pct}%`}</span>
+                        )}
                       </span>
                     </td>
                   );
@@ -976,65 +952,39 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
         </table>
       </div>
 
-      {/* تحديثات هذا الأسبوع */}
-      {prevPeriod && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h2 className="section-title" style={{ color: "#22d3ee" }}>
-            تحديثات هذا الأسبوع مقارنةً بـ«{prevPeriod.label}» ({updates.length})
-          </h2>
-          {updates.length === 0 ? (
-            <div className="muted">لا توجد تغييرات في المنجز عن الأسبوع السابق.</div>
-          ) : (
-            <div className="weak-grid">
-              {updates.slice(0, 12).map((u, i) => (
-                <div
-                  key={i}
-                  className="weak-item"
-                  style={{ borderRightColor: u.delta >= 0 ? "#22c55e" : "#ef4444" }}
-                >
-                  <span
-                    className="weak-pct"
-                    dir="ltr"
-                    style={{ color: u.delta >= 0 ? "#22c55e" : "#ef4444" }}
-                  >
-                    {u.delta >= 0 ? "+" : ""}
-                    {fmtNum(u.delta)}
-                  </span>
-                  <div>
-                    <div className="weak-ind">{u.indicator}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {u.sector} ·{" "}
-                      <span dir="ltr">
-                        {u.from == null ? "—" : fmtNum(u.from)} → {fmtNum(u.to)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* أبرز المؤشرات المتعثرة للنقاش */}
-      {weakItems.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h2 className="section-title" style={{ color: GAUGE.weak }}>
-            أبرز المؤشرات المتعثرة ({weakItems.length})
-          </h2>
+      {/* أبرز إنجازات هذا الأسبوع */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2 className="section-title" style={{ color: GAUGE.excellent }}>
+          أبرز إنجازات هذا الأسبوع ({weekWins.length})
+        </h2>
+        {weekWins.length === 0 ? (
+          <div className="muted">لم تُسجّل أي جهات مُغطّاة في هذا الأسبوع بعد.</div>
+        ) : (
           <div className="weak-grid">
-            {weakItems.slice(0, 12).map((w, i) => (
-              <div key={i} className="weak-item">
-                <span className="weak-pct">{w.v}%</span>
+            {weekWins.slice(0, 12).map((w, i) => (
+              <div key={i} className="weak-item" style={{ borderRightColor: "#22c55e" }}>
+                <span className="weak-pct" style={{ color: "#22c55e" }} dir="ltr">
+                  {fmtNum(w.week)}
+                </span>
                 <div>
-                  <div className="weak-ind">{w.indicator}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>{w.sector}</div>
+                  <div className="weak-ind">{w.sector}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {w.indicator}
+                    {w.target != null && (
+                      <>
+                        {" · "}
+                        <span dir="ltr">
+                          التراكمي {fmtNum(w.cum)}/{fmtNum(w.target)}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

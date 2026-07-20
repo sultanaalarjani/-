@@ -750,3 +750,8 @@ table.matrix thead th {
 .mode-toggle { display: inline-flex; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; overflow: hidden; }
 .mode-toggle button { background: transparent; color: #fff; border: none; padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
 .mode-toggle button.on { background: #fff; color: #0e3a5f; }
+
+/* خلية العرض الأسبوعي بسطرين: هذا الأسبوع + التراكمي */
+.cell-pill { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.15; }
+.cp-main { font-size: 15px; font-weight: 800; }
+.cp-sub { font-size: 10.5px; font-weight: 600; opacity: 0.72; }
