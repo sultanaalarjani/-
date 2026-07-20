@@ -86,6 +86,8 @@ interface DBShape {
   periods: Period[];
   measurements: Measurement[];
   settings: Settings;
+  // المستهدفات السنوية الثابتة لكل (قطاع|مؤشر) = عدد الجهات
+  targets: Record<string, number>;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -101,7 +103,12 @@ function defaultDB(): DBShape {
     periods: [],
     measurements: [],
     settings: { goodThreshold: 80, excellentThreshold: 100 },
+    targets: {},
   };
+}
+
+export function targetKey(sectorId: string, indicatorId: string): string {
+  return `${sectorId}|${indicatorId}`;
 }
 
 export function newId(): string {
@@ -450,6 +457,45 @@ export async function saveIndicators(items: IndicatorInput[]): Promise<Indicator
   return db.indicators;
 }
 
+// ===== المستهدفات السنوية الثابتة =====
+export async function getTargets(): Promise<Record<string, number>> {
+  return (await getDB()).targets || {};
+}
+
+// حفظ المستهدفات السنوية ونشرها على قياسات كل الأسابيع (المنجز/actual يبقى كما هو)
+export async function saveTargets(map: Record<string, number>): Promise<Record<string, number>> {
+  const db = await getDB();
+  const clean: Record<string, number> = {};
+  for (const [k, v] of Object.entries(map || {})) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) clean[k] = n;
+  }
+  db.targets = clean;
+  for (const p of db.periods) {
+    for (const [key, val] of Object.entries(clean)) {
+      const [sectorId, indicatorId] = key.split("|");
+      if (!sectorId || !indicatorId) continue;
+      const m = db.measurements.find(
+        (x) => x.sectorId === sectorId && x.indicatorId === indicatorId && x.periodId === p.id
+      );
+      if (m) m.target = val;
+      else
+        db.measurements.push({
+          id: newId(),
+          sectorId,
+          indicatorId,
+          periodId: p.id,
+          target: val,
+          actual: null,
+          updatedBy: "system",
+          updatedAt: new Date().toISOString(),
+        });
+    }
+  }
+  await save(db);
+  return db.targets;
+}
+
 // ===== الفترات =====
 export async function listPeriods(): Promise<Period[]> {
   return (await getDB()).periods.sort((a, b) => a.order - b.order);
@@ -459,6 +505,21 @@ export async function createPeriod(label: string): Promise<Period> {
   const db = await getDB();
   const period: Period = { id: newId(), label: label.trim(), order: db.periods.length + 1 };
   db.periods.push(period);
+  // تعبئة المستهدفات السنوية الثابتة لهذا الأسبوع الجديد (المنجز يبقى فارغًا)
+  for (const [key, val] of Object.entries(db.targets || {})) {
+    const [sectorId, indicatorId] = key.split("|");
+    if (!sectorId || !indicatorId) continue;
+    db.measurements.push({
+      id: newId(),
+      sectorId,
+      indicatorId,
+      periodId: period.id,
+      target: val,
+      actual: null,
+      updatedBy: "system",
+      updatedAt: new Date().toISOString(),
+    });
+  }
   await save(db);
   return period;
 }

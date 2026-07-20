@@ -45,6 +45,7 @@ interface RefData {
   indicators: Indicator[];
   periods: Period[];
   thresholds: Thresholds;
+  targets: Record<string, number>; // المستهدفات السنوية لكل (قطاع|مؤشر)
 }
 
 const EMPTY_REF: RefData = {
@@ -52,7 +53,12 @@ const EMPTY_REF: RefData = {
   indicators: [],
   periods: [],
   thresholds: DEFAULT_THRESHOLDS,
+  targets: {},
 };
+
+function tkey(sectorId: string, indicatorId: string) {
+  return `${sectorId}|${indicatorId}`;
+}
 
 const GAUGE = { weak: "#ef4444", good: "#f59e0b", excellent: "#22c55e", track: "rgba(255,255,255,0.08)" };
 function statusColor(s: string) {
@@ -67,11 +73,12 @@ export default function Dashboard({ me }: { me: Me }) {
   const [loaded, setLoaded] = useState(false);
 
   const loadRef = useCallback(async () => {
-    const [s, i, p, st] = await Promise.all([
+    const [s, i, p, st, tg] = await Promise.all([
       fetch("/api/sectors").then((r) => r.json()),
       fetch(`/api/indicators${isAdmin ? "?all=1" : ""}`).then((r) => r.json()),
       fetch("/api/periods").then((r) => r.json()),
       fetch("/api/settings").then((r) => r.json()),
+      fetch("/api/targets").then((r) => r.json()),
     ]);
     setRefData({
       sectors: s.sectors || [],
@@ -80,6 +87,7 @@ export default function Dashboard({ me }: { me: Me }) {
       thresholds: st.settings
         ? { good: st.settings.goodThreshold, excellent: st.settings.excellentThreshold }
         : DEFAULT_THRESHOLDS,
+      targets: tg.targets || {},
     });
     setLoaded(true);
   }, [isAdmin]);
@@ -634,7 +642,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const thr = refData.thresholds;
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const [mode, setMode] = useState<"percent" | "number">("percent");
+  const [mode, setMode] = useState<"percent" | "number">("number");
 
   const load = useCallback(async () => {
     const d = await fetch("/api/measurements").then((r) => r.json());
@@ -661,11 +669,12 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       indicators.map((ind, i) => {
         const perSector = sectors.map((s) => {
           const m = mMap.get(mkey(s.id, ind.id, periodId));
+          const target = refData.targets[tkey(s.id, ind.id)] ?? m?.target ?? null;
           return {
             sector: s,
-            v: evaluate(m?.actual, m?.target).achievement,
+            v: evaluate(m?.actual, target).achievement,
             actual: m?.actual ?? null,
-            target: m?.target ?? null,
+            target,
           };
         });
         const vals = perSector.map((x) => x.v).filter((v): v is number => v != null);
@@ -699,6 +708,38 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       if (ps.v != null && perfStatus(ps.v, thr) === "weak")
         weakItems.push({ indicator: r.ind.name, sector: ps.sector.name, v: Math.round(ps.v) });
   weakItems.sort((a, b) => a.v - b.v);
+
+  // إجماليات الأسبوع (عدد الجهات): المنجز مقابل المستهدف
+  let totalActual = 0;
+  let totalTarget = 0;
+  for (const r of indRows)
+    for (const ps of r.perSector) {
+      if (ps.actual != null) totalActual += ps.actual;
+      if (ps.target != null) totalTarget += ps.target;
+    }
+
+  // تحديثات هذا الأسبوع مقارنةً بالأسبوع السابق (ما الذي تغيّر في المنجز)
+  const periodsSorted = [...refData.periods].sort((a, b) => a.order - b.order);
+  const curIdx = periodsSorted.findIndex((p) => p.id === periodId);
+  const prevPeriod = curIdx > 0 ? periodsSorted[curIdx - 1] : null;
+  const updates: { indicator: string; sector: string; from: number | null; to: number; delta: number }[] = [];
+  if (prevPeriod) {
+    for (const ind of indicators)
+      for (const s of sectors) {
+        const cur = mMap.get(mkey(s.id, ind.id, periodId))?.actual ?? null;
+        const prev = mMap.get(mkey(s.id, ind.id, prevPeriod.id))?.actual ?? null;
+        if (cur != null && cur !== prev) {
+          updates.push({
+            indicator: ind.name,
+            sector: s.name,
+            from: prev,
+            to: cur,
+            delta: cur - (prev ?? 0),
+          });
+        }
+      }
+    updates.sort((a, b) => b.delta - a.delta);
+  }
 
   const periodLabel = refData.periods.find((p) => p.id === periodId)?.label || "";
   const today = new Date().toLocaleDateString("ar-SA-u-nu-latn", {
@@ -841,8 +882,10 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* ملخص سريع */}
       <div className="kpis" style={{ marginTop: 14 }}>
         <div className="kpi">
-          <div className="v" style={{ color: "#22d3ee" }}>{overall != null ? `${overall}%` : "—"}</div>
-          <div className="l">الإنجاز العام</div>
+          <div className="v" style={{ color: "#22d3ee" }} dir="ltr">
+            {fmtNum(totalActual)} / {fmtNum(totalTarget)}
+          </div>
+          <div className="l">إجمالي المنجز / المستهدف (عدد الجهات)</div>
         </div>
         <div className="kpi">
           <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
@@ -864,7 +907,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           حالة المؤشرات حسب القطاع
           {mode === "number" && (
             <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
-              (الأرقام تعرض: المحقق / المستهدف)
+              (الأرقام تعرض عدد الجهات المنجزة)
             </span>
           )}
         </h2>
@@ -887,7 +930,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                 {r.perSector.map((ps) => {
                   const v = ps.v == null ? null : Math.round(ps.v);
                   const c = cellColor(v);
-                  const txt = mode === "number" ? numTxt(ps.actual, ps.target) : v == null ? "—" : `${v}%`;
+                  const txt =
+                    mode === "number"
+                      ? ps.actual != null
+                        ? fmtNum(ps.actual)
+                        : "—"
+                      : v == null
+                      ? "—"
+                      : `${v}%`;
                   return (
                     <td key={ps.sector.id}>
                       <span
@@ -904,7 +954,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                   const c = cellColor(r.value);
                   const txt =
                     mode === "number"
-                      ? `${fmtNum(r.sumA)} / ${fmtNum(r.sumT)}`
+                      ? fmtNum(r.sumA)
                       : r.value == null
                       ? "—"
                       : `${r.value}%`;
@@ -925,6 +975,46 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           </tbody>
         </table>
       </div>
+
+      {/* تحديثات هذا الأسبوع */}
+      {prevPeriod && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 className="section-title" style={{ color: "#22d3ee" }}>
+            تحديثات هذا الأسبوع مقارنةً بـ«{prevPeriod.label}» ({updates.length})
+          </h2>
+          {updates.length === 0 ? (
+            <div className="muted">لا توجد تغييرات في المنجز عن الأسبوع السابق.</div>
+          ) : (
+            <div className="weak-grid">
+              {updates.slice(0, 12).map((u, i) => (
+                <div
+                  key={i}
+                  className="weak-item"
+                  style={{ borderRightColor: u.delta >= 0 ? "#22c55e" : "#ef4444" }}
+                >
+                  <span
+                    className="weak-pct"
+                    dir="ltr"
+                    style={{ color: u.delta >= 0 ? "#22c55e" : "#ef4444" }}
+                  >
+                    {u.delta >= 0 ? "+" : ""}
+                    {fmtNum(u.delta)}
+                  </span>
+                  <div>
+                    <div className="weak-ind">{u.indicator}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {u.sector} ·{" "}
+                      <span dir="ltr">
+                        {u.from == null ? "—" : fmtNum(u.from)} → {fmtNum(u.to)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* أبرز المؤشرات المتعثرة للنقاش */}
       {weakItems.length > 0 && (
@@ -956,7 +1046,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
   const thr = refData.thresholds;
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
-  const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
+  const [vals, setVals] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
@@ -967,12 +1057,9 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       return;
     }
     const d = await fetch(`/api/measurements?sectorId=${sectorId}&periodId=${periodId}`).then((r) => r.json());
-    const map: Record<string, { target: string; actual: string }> = {};
+    const map: Record<string, string> = {};
     for (const m of (d.measurements || []) as Measurement[]) {
-      map[m.indicatorId] = {
-        target: m.target != null ? String(m.target) : "",
-        actual: m.actual != null ? String(m.actual) : "",
-      };
+      map[m.indicatorId] = m.actual != null ? String(m.actual) : "";
     }
     setVals(map);
   }, [sectorId, periodId]);
@@ -981,9 +1068,11 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
     loadVals();
   }, [loadVals]);
 
-  function setVal(indId: string, key: "target" | "actual", v: string) {
-    setVals((s) => ({ ...s, [indId]: { ...(s[indId] || { target: "", actual: "" }), [key]: v } }));
+  function setVal(indId: string, v: string) {
+    setVals((s) => ({ ...s, [indId]: v }));
   }
+
+  const targetOf = (indId: string): number | null => refData.targets[tkey(sectorId, indId)] ?? null;
 
   async function save() {
     setErr("");
@@ -994,8 +1083,8 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
         sectorId,
         indicatorId: ind.id,
         periodId,
-        target: vals[ind.id]?.target ?? "",
-        actual: vals[ind.id]?.actual ?? "",
+        target: targetOf(ind.id) ?? "",
+        actual: vals[ind.id] ?? "",
       }));
       const res = await fetch("/api/measurements", {
         method: "PUT",
@@ -1004,7 +1093,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       });
       const data = await res.json();
       if (!res.ok) setErr(data.error || "تعذّر الحفظ");
-      else setMsg("تم حفظ البيانات بنجاح ✓");
+      else setMsg("تم حفظ المنجز بنجاح ✓");
     } finally {
       setLoading(false);
     }
@@ -1014,12 +1103,16 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
     return <div className="empty">لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.</div>;
   }
   if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
+    return <div className="empty">لا توجد أسابيع. أضِفها من تبويب الهيكل التنظيمي ← الأسابيع.</div>;
   }
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال قياسات الأداء</h2>
+      <h2 className="section-title">إدخال المنجز الأسبوعي</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
+        اختر القطاع والأسبوع، ثم أدخل عدد الجهات المنجزة لكل مؤشر. المستهدف ثابت للسنة (يُضبط من
+        {me.role === "admin" ? " الهيكل ← المستهدفات" : " قِبل مدير الإدارة"}).
+      </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
           <label>القطاع</label>
@@ -1032,7 +1125,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
           </select>
         </div>
         <div>
-          <label>الربع</label>
+          <label>الأسبوع</label>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -1051,27 +1144,34 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
           <thead>
             <tr>
               <th style={{ minWidth: 280 }}>المؤشر</th>
-              <th>المستهدف</th>
-              <th>المحقق</th>
+              <th>المستهدف (ثابت)</th>
+              <th>المنجز هذا الأسبوع</th>
               <th>نسبة الإنجاز</th>
             </tr>
           </thead>
           <tbody>
             {indicators.map((ind, i) => {
-              const tv = vals[ind.id]?.target ?? "";
-              const av = vals[ind.id]?.actual ?? "";
-              const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), thr);
+              const tgt = targetOf(ind.id);
+              const av = vals[ind.id] ?? "";
+              const r = evaluate(av === "" ? null : Number(av), tgt, thr);
               return (
                 <tr key={ind.id}>
                   <td>
-                    <strong>م{i + 1}.</strong> {ind.name}{" "}
-                    <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
+                    <strong>م{i + 1}.</strong> {ind.name}
                   </td>
-                  <td style={{ width: 110 }}>
-                    <input type="number" step="any" value={tv} onChange={(e) => setVal(ind.id, "target", e.target.value)} />
+                  <td style={{ width: 120, textAlign: "center" }}>
+                    <span className="muted" style={{ fontWeight: 700 }}>
+                      {tgt != null ? fmtNum(tgt) : "—"}
+                    </span>
                   </td>
-                  <td style={{ width: 110 }}>
-                    <input type="number" step="any" value={av} onChange={(e) => setVal(ind.id, "actual", e.target.value)} />
+                  <td style={{ width: 130 }}>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={av}
+                      onChange={(e) => setVal(ind.id, e.target.value)}
+                    />
                   </td>
                   <td style={{ textAlign: "center" }}>
                     <span className="badge" style={{ background: r.color, color: r.text }}>
@@ -1086,7 +1186,7 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
       </div>
       <div style={{ marginTop: 16 }}>
         <button className="btn" onClick={save} disabled={loading}>
-          {loading ? "جارٍ الحفظ..." : "حفظ القياسات"}
+          {loading ? "جارٍ الحفظ..." : "حفظ المنجز"}
         </button>
       </div>
     </div>
@@ -1095,7 +1195,9 @@ function DataEntry({ me, refData }: { me: Me; refData: RefData }) {
 
 /* ============ الهيكل التنظيمي ============ */
 function StructureManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [sub, setSub] = useState<"sectors" | "indicators" | "periods" | "thresholds">("sectors");
+  const [sub, setSub] = useState<"sectors" | "indicators" | "targets" | "periods" | "thresholds">(
+    "sectors"
+  );
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
@@ -1105,8 +1207,11 @@ function StructureManager({ refData, reload }: { refData: RefData; reload: () =>
         <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
           المؤشرات
         </button>
+        <button className={`tab ${sub === "targets" ? "active" : ""}`} onClick={() => setSub("targets")}>
+          المستهدفات
+        </button>
         <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
-          الفترات
+          الأسابيع
         </button>
         <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
           عتبات الحالة
@@ -1114,8 +1219,104 @@ function StructureManager({ refData, reload }: { refData: RefData; reload: () =>
       </div>
       {sub === "sectors" && <SectorsManager refData={refData} reload={reload} />}
       {sub === "indicators" && <IndicatorsManager refData={refData} reload={reload} />}
+      {sub === "targets" && <TargetsManager refData={refData} reload={reload} />}
       {sub === "periods" && <PeriodsManager refData={refData} reload={reload} />}
       {sub === "thresholds" && <ThresholdsManager refData={refData} reload={reload} />}
+    </div>
+  );
+}
+
+/* ============ المستهدفات السنوية ============ */
+function TargetsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const sectors = refData.sectors;
+  const indicators = refData.indicators;
+  const [vals, setVals] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const [k, v] of Object.entries(refData.targets || {})) init[k] = String(v);
+    return init;
+  });
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  function setVal(sectorId: string, indId: string, v: string) {
+    setVals((s) => ({ ...s, [tkey(sectorId, indId)]: v }));
+  }
+
+  async function save() {
+    setMsg("");
+    setErr("");
+    setLoading(true);
+    try {
+      const targets: Record<string, number> = {};
+      for (const [k, v] of Object.entries(vals)) {
+        const n = Number(v);
+        if (v !== "" && Number.isFinite(n) && n >= 0) targets[k] = n;
+      }
+      const res = await fetch("/api/targets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+      });
+      const d = await res.json();
+      if (!res.ok) setErr(d.error || "تعذّر الحفظ");
+      else {
+        setMsg("تم حفظ المستهدفات ✓ (تُطبّق على كل الأسابيع)");
+        reload();
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (sectors.length === 0 || indicators.length === 0) {
+    return <div className="empty">أضِف القطاعات والمؤشرات أولًا ثم اضبط المستهدفات.</div>;
+  }
+
+  return (
+    <div className="card" style={{ overflowX: "auto" }}>
+      <h2 className="section-title">المستهدفات السنوية (عدد الجهات لكل قطاع × مؤشر)</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
+        تُدخل مرة واحدة وتبقى ثابتة طوال السنة. المنجز يُحدّث أسبوعيًا من تبويب «إدخال المنجز».
+      </p>
+      {err && <div className="alert alert-error">{err}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
+      <table className="matrix">
+        <thead>
+          <tr>
+            <th style={{ textAlign: "right", minWidth: 220 }}>المؤشر</th>
+            {sectors.map((s) => (
+              <th key={s.id}>{s.name}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {indicators.map((ind, i) => (
+            <tr key={ind.id}>
+              <td style={{ textAlign: "right" }}>
+                <span className="muted">م{i + 1}.</span> {ind.name}
+              </td>
+              {sectors.map((s) => (
+                <td key={s.id}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    style={{ width: 80, textAlign: "center" }}
+                    value={vals[tkey(s.id, ind.id)] ?? ""}
+                    onChange={(e) => setVal(s.id, ind.id, e.target.value)}
+                  />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 16 }}>
+        <button className="btn" onClick={save} disabled={loading}>
+          {loading ? "جارٍ الحفظ..." : "حفظ المستهدفات"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1338,7 +1539,7 @@ function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => v
     reload();
   }
   async function rename(id: string, current: string) {
-    const v = prompt("اسم الفترة الجديد:", current);
+    const v = prompt("اسم الأسبوع الجديد:", current);
     if (v && v.trim()) {
       await fetch(`/api/periods/${id}`, {
         method: "PATCH",
@@ -1349,25 +1550,28 @@ function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => v
     }
   }
   async function remove(id: string) {
-    if (!confirm("حذف الفترة سيحذف قياساتها. متابعة؟")) return;
+    if (!confirm("حذف الأسبوع سيحذف بياناته. متابعة؟")) return;
     await fetch(`/api/periods/${id}`, { method: "DELETE" });
     reload();
   }
   return (
     <div className="card">
-      <h2 className="section-title">الفترات ({refData.periods.length})</h2>
+      <h2 className="section-title">الأسابيع ({refData.periods.length})</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
+        أضِف أسبوعًا جديدًا كل مرة تبين ترصدين فيها التحديث. المستهدفات تُنسخ تلقائيًا للأسبوع الجديد.
+      </p>
       <div className="row" style={{ marginBottom: 16 }}>
-        <input placeholder="مثال: الربع الأول 2026" value={label} onChange={(e) => setLabel(e.target.value)} />
+        <input placeholder="مثال: أسبوع 1 · 5 يناير 2026" value={label} onChange={(e) => setLabel(e.target.value)} />
         <div style={{ flex: "0 0 auto" }}>
           <button className="btn" onClick={add}>
-            إضافة فترة
+            إضافة أسبوع
           </button>
         </div>
       </div>
       <table>
         <thead>
           <tr>
-            <th>الفترة</th>
+            <th>الأسبوع</th>
             <th></th>
           </tr>
         </thead>
