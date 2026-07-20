@@ -10,13 +10,15 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const user = await getCurrentUser();
-  if (!user || user.role !== "admin") {
+  if (!user) return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+  const { label, weekStart } = await req.json().catch(() => ({}));
+  if (!label || !String(label).trim()) {
+    return NextResponse.json({ error: "أدخل اسم الأسبوع" }, { status: 400 });
+  }
+  // الإضافة اليدوية (بدون تاريخ) لمدير الإدارة فقط؛ الأسابيع بالتاريخ متاحة لكل من يُدخل البيانات
+  if (!weekStart && user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  const { label } = await req.json().catch(() => ({}));
-  if (!label || !String(label).trim()) {
-    return NextResponse.json({ error: "أدخل اسم الفترة" }, { status: 400 });
-  }
-  const period = await createPeriod(String(label));
+  const period = await createPeriod(String(label), weekStart ? String(weekStart) : undefined);
   return NextResponse.json({ ok: true, period });
 }

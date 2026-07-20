@@ -59,6 +59,7 @@ export interface Period {
   id: string;
   label: string;
   order: number;
+  weekStart?: string; // تاريخ بداية الأسبوع (YYYY-MM-DD) — للأسابيع المبنية على التقويم
 }
 
 export interface Measurement {
@@ -199,12 +200,6 @@ const DEFAULT_SECTORS = [
   "قطاع الشؤون الحكومية",
 ];
 
-const DEFAULT_PERIODS = [
-  "الأسبوع الأول",
-  "الأسبوع الثاني",
-  "الأسبوع الثالث",
-  "الأسبوع الرابع",
-];
 
 // ===== التهيئة =====
 function seed(db: DBShape): DBShape {
@@ -239,9 +234,7 @@ function seed(db: DBShape): DBShape {
       order: i + 1,
     }));
   }
-  if (db.periods.length === 0) {
-    db.periods = DEFAULT_PERIODS.map((label, i) => ({ id: newId(), label, order: i + 1 }));
-  }
+  // لا تُنشأ أسابيع افتراضية — تُنشأ من التقويم عند إدخال البيانات
 
   if (process.env.SEED_DEMO === "true" && db.measurements.length === 0) {
     db.sectors.forEach((s, si) =>
@@ -501,9 +494,18 @@ export async function listPeriods(): Promise<Period[]> {
   return (await getDB()).periods.sort((a, b) => a.order - b.order);
 }
 
-export async function createPeriod(label: string): Promise<Period> {
+export async function createPeriod(label: string, weekStart?: string): Promise<Period> {
   const db = await getDB();
-  const period: Period = { id: newId(), label: label.trim(), order: db.periods.length + 1 };
+  // منع التكرار: لو الأسبوع (بنفس تاريخ البداية) موجود، أعِده
+  if (weekStart) {
+    const existing = db.periods.find((p) => p.weekStart === weekStart);
+    if (existing) return existing;
+  }
+  // ترتيب زمني تلقائي حسب تاريخ بداية الأسبوع (أيام منذ 1970)
+  const order = weekStart
+    ? Math.floor(new Date(weekStart + "T00:00:00Z").getTime() / 86400000)
+    : db.periods.length + 1;
+  const period: Period = { id: newId(), label: label.trim(), order, weekStart };
   db.periods.push(period);
   // تعبئة المستهدفات السنوية الثابتة لهذا الأسبوع الجديد (المنجز يبقى فارغًا)
   for (const [key, val] of Object.entries(db.targets || {})) {

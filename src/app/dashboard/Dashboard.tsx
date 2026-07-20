@@ -30,6 +30,31 @@ interface Period {
   id: string;
   label: string;
   order: number;
+  weekStart?: string;
+}
+
+const AR_MONTHS = [
+  "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+];
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function todayISO(): string {
+  return isoDate(new Date());
+}
+// حساب أسبوع التاريخ (يبدأ الأحد) وإرجاع تاريخ البداية واسم معروض بالتاريخ
+function weekOf(dateStr: string): { weekStart: string; label: string } {
+  const d = new Date(dateStr + "T00:00:00");
+  const start = new Date(d);
+  start.setDate(d.getDate() - d.getDay()); // الأحد
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6); // السبت
+  const label =
+    start.getMonth() === end.getMonth()
+      ? `${start.getDate()}–${end.getDate()} ${AR_MONTHS[start.getMonth()]} ${start.getFullYear()}`
+      : `${start.getDate()} ${AR_MONTHS[start.getMonth()]} – ${end.getDate()} ${AR_MONTHS[end.getMonth()]} ${end.getFullYear()}`;
+  return { weekStart: isoDate(start), label };
 }
 interface Measurement {
   id: string;
@@ -675,7 +700,10 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const thr = refData.thresholds;
-  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const [date, setDate] = useState(todayISO());
+  const week = weekOf(date);
+  const period = refData.periods.find((p) => p.weekStart === week.weekStart);
+  const periodId = period?.id || "";
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
 
   const load = useCallback(async () => {
@@ -692,12 +720,13 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     return m;
   }, [measurements]);
 
-  // الأسابيع حتى الأسبوع المختار (لحساب التراكمي)
+  // الأسابيع حتى الأسبوع المختار (لحساب التراكمي) — الترتيب زمني حسب تاريخ البداية
   const periodsSorted = useMemo(
     () => [...refData.periods].sort((a, b) => a.order - b.order),
     [refData.periods]
   );
-  const curOrder = refData.periods.find((p) => p.id === periodId)?.order ?? 0;
+  // ترتيب الأسبوع المختار زمنيًا (حتى لو لم يُنشأ له سجل بعد)
+  const curOrder = Math.floor(new Date(week.weekStart + "T00:00:00Z").getTime() / 86400000);
 
   // جهات هذا الأسبوع + التراكمي حتى الآن لكل (قطاع×مؤشر)
   const indRows = useMemo(() => {
@@ -750,7 +779,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
         weekWins.push({ indicator: r.ind.name, sector: ps.sector.name, week: ps.week, cum: ps.cum, target: ps.target });
   weekWins.sort((a, b) => b.week - a.week);
 
-  const periodLabel = refData.periods.find((p) => p.id === periodId)?.label || "";
+  const periodLabel = week.label;
   const today = new Date().toLocaleDateString("ar-SA-u-nu-latn", {
     weekday: "long",
     year: "numeric",
@@ -844,10 +873,6 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     URL.revokeObjectURL(url);
   }
 
-  if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
-  }
-
   const cellOf = (status: string) => {
     if (status === "none" || !status) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
     const meta = statusMeta(status as "excellent" | "good" | "weak");
@@ -863,13 +888,18 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="weekly-date">{today} · {periodLabel}</div>
         </div>
         <div className="weekly-actions">
-          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-            {refData.periods.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value || todayISO())}
+            style={{
+              background: "rgba(255,255,255,0.12)",
+              color: "#fff",
+              border: "1px solid rgba(255,255,255,0.25)",
+              borderRadius: 10,
+              padding: "8px 10px",
+            }}
+          />
           <button className="btn btn-sm btn-ghost" onClick={load}>تحديث</button>
           <button className="btn btn-sm" onClick={printPDF}>🖨 حفظ PDF</button>
           <button className="btn btn-sm" onClick={exportExcel}>⬇ Excel</button>
@@ -1000,7 +1030,10 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   const thr = refData.thresholds;
   const isAdmin = me.role === "admin";
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
-  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const [date, setDate] = useState(todayISO());
+  const week = weekOf(date);
+  const period = refData.periods.find((p) => p.weekStart === week.weekStart);
+  const periodId = period?.id || "";
   const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -1033,12 +1066,26 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
     setVals((s) => ({ ...s, [indId]: { ...(s[indId] || { target: "", actual: "" }), [key]: v } }));
   }
 
+  async function ensurePeriodId(): Promise<string> {
+    if (periodId) return periodId;
+    const res = await fetch("/api/periods", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: week.label, weekStart: week.weekStart }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.period) throw new Error(d.error || "تعذّر إنشاء الأسبوع");
+    return d.period.id as string;
+  }
+
   async function save() {
     setErr("");
     setMsg("");
     setLoading(true);
     try {
-      // 1) المستهدفات (سنوية) — دمج مع باقي القطاعات حتى لا تُمحى
+      // 1) تأكيد وجود الأسبوع (يُنشأ تلقائيًا من التاريخ إن لم يكن موجودًا)
+      const pid = await ensurePeriodId();
+      // 2) المستهدفات (سنوية) — دمج مع باقي القطاعات حتى لا تُمحى
       if (isAdmin) {
         const merged: Record<string, number> = { ...refData.targets };
         for (const ind of indicators) {
@@ -1056,11 +1103,11 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
           body: JSON.stringify({ targets: merged }),
         });
       }
-      // 2) المنجز (هذا الأسبوع)
+      // 3) المنجز لهذا الأسبوع
       const items = indicators.map((ind) => ({
         sectorId,
         indicatorId: ind.id,
-        periodId,
+        periodId: pid,
         target: vals[ind.id]?.target ?? "",
         actual: vals[ind.id]?.actual ?? "",
       }));
@@ -1075,6 +1122,8 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
         setMsg("تم الحفظ بنجاح ✓");
         reload();
       }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "تعذّر الحفظ");
     } finally {
       setLoading(false);
     }
@@ -1083,15 +1132,12 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   if (sectors.length === 0) {
     return <div className="empty">لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.</div>;
   }
-  if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد أسابيع. أضِفها من تبويب الهيكل التنظيمي ← الأسابيع.</div>;
-  }
 
   return (
     <div className="card">
       <h2 className="section-title">إدخال المستهدف والمنجز</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        اختر القطاع والأسبوع، ثم عبّئ المستهدف السنوي والمنجز لهذا الأسبوع لكل مؤشر (عدد الجهات).
+        اختر القطاع وتاريخ الأسبوع من التقويم، ثم عبّئ المستهدف السنوي والمنجز لهذا الأسبوع (عدد الجهات).
       </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
@@ -1105,14 +1151,12 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
           </select>
         </div>
         <div>
-          <label>الأسبوع</label>
-          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-            {refData.periods.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+          <label>اختر تاريخًا (يحدّد الأسبوع)</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value || todayISO())} />
+          <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
+            الأسبوع: <strong style={{ color: "var(--text)" }}>{week.label}</strong>
+            {!period && <span style={{ color: "#22c55e" }}> · (أسبوع جديد يُنشأ عند الحفظ)</span>}
+          </div>
         </div>
       </div>
 
