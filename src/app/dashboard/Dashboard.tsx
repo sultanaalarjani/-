@@ -304,7 +304,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
   }
 
   function exportCsv() {
-    const header = ["القطاع", "المؤشر", "الوحدة", "الربع", "المستهدف", "المحقق", "نسبة الإنجاز %"];
+    const header = ["القطاع", "المؤشر", "الوحدة", "الأسبوع", "المستهدف", "المحقق", "نسبة الإنجاز %"];
     const rows: string[][] = [];
     for (const s of sectors)
       for (const ind of indicators)
@@ -341,7 +341,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     <div>
       <div className="toolbar">
         <div>
-          <label style={{ marginBottom: 4 }}>الفترة</label>
+          <label style={{ marginBottom: 4 }}>الأسبوع</label>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
