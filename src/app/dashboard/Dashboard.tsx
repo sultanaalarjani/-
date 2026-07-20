@@ -636,13 +636,47 @@ function IndicatorModal({
 }
 
 /* ============ التحديث الأسبوعي ============ */
+function TargetActualCell({
+  target,
+  actual,
+  week,
+  bg,
+  fg,
+  strong,
+}: {
+  target: number | null;
+  actual: number;
+  week: number | null;
+  bg: string;
+  fg: string;
+  strong?: boolean;
+}) {
+  return (
+    <div className="ta-cell" style={{ background: bg, color: fg }}>
+      <div className="ta-box">
+        <span className="ta-lbl">مستهدف</span>
+        <span className="ta-val">{target != null ? fmtNum(target) : "—"}</span>
+      </div>
+      <div className="ta-sep" />
+      <div className="ta-box">
+        <span className="ta-lbl">منجز</span>
+        <span className={"ta-val" + (strong ? " strong" : "")}>{fmtNum(actual)}</span>
+      </div>
+      {week != null && week > 0 && (
+        <span className="ta-week" dir="ltr">
+          +{fmtNum(week)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const thr = refData.thresholds;
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const [mode, setMode] = useState<"percent" | "number">("number");
 
   const load = useCallback(async () => {
     const d = await fetch("/api/measurements").then((r) => r.json());
@@ -829,14 +863,6 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="weekly-date">{today} · {periodLabel}</div>
         </div>
         <div className="weekly-actions">
-          <div className="mode-toggle">
-            <button className={mode === "percent" ? "on" : ""} onClick={() => setMode("percent")}>
-              نسبة %
-            </button>
-            <button className={mode === "number" ? "on" : ""} onClick={() => setMode("number")}>
-              أرقام
-            </button>
-          </div>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -879,11 +905,9 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* مصفوفة المؤشرات × القطاعات */}
       <div className="card" style={{ marginTop: 16, overflowX: "auto" }}>
         <h2 className="section-title">
-          كم جهة غطّى كل قطاع هذا الأسبوع
+          المستهدف والمنجز لكل قطاع
           <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
-            {mode === "number"
-              ? "(الرقم الكبير: هذا الأسبوع · الصغير: التراكمي / المستهدف السنوي)"
-              : "(النسبة = التراكمي ÷ المستهدف السنوي)"}
+            (المنجز = التراكمي حتى هذا الأسبوع · +N = المُغطّى هذا الأسبوع)
           </span>
         </h2>
         <table className="matrix">
@@ -893,7 +917,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
               {sectors.map((s) => (
                 <th key={s.id}>{s.name}</th>
               ))}
-              <th>{mode === "number" ? "الإجمالي" : "المتوسط"}</th>
+              <th>الإجمالي</th>
             </tr>
           </thead>
           <tbody>
@@ -904,48 +928,28 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                 </td>
                 {r.perSector.map((ps) => {
                   const c = cellOf(ps.status);
-                  const pct = ps.target ? Math.round((ps.cum / ps.target) * 100) : null;
                   return (
                     <td key={ps.sector.id}>
-                      <span className="cell-pill" dir="ltr" style={{ background: c.bg, color: c.fg }}>
-                        {mode === "number" ? (
-                          <>
-                            <span className="cp-main">{ps.week != null ? fmtNum(ps.week) : "—"}</span>
-                            {ps.target != null && (
-                              <span className="cp-sub">
-                                {fmtNum(ps.cum)}/{fmtNum(ps.target)}
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="cp-main">{pct == null ? "—" : `${pct}%`}</span>
-                        )}
-                      </span>
+                      <TargetActualCell
+                        target={ps.target}
+                        actual={ps.cum}
+                        week={ps.week}
+                        bg={c.bg}
+                        fg={c.fg}
+                      />
                     </td>
                   );
                 })}
-                {(() => {
-                  const c = cellOf(r.rowStatus);
-                  const pct = r.tgtSum ? Math.round((r.cumSum / r.tgtSum) * 100) : null;
-                  return (
-                    <td>
-                      <span className="cell-pill strong" dir="ltr" style={{ background: c.bg, color: c.fg }}>
-                        {mode === "number" ? (
-                          <>
-                            <span className="cp-main">{fmtNum(r.weekSum)}</span>
-                            {r.tgtSum > 0 && (
-                              <span className="cp-sub">
-                                {fmtNum(r.cumSum)}/{fmtNum(r.tgtSum)}
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <span className="cp-main">{pct == null ? "—" : `${pct}%`}</span>
-                        )}
-                      </span>
-                    </td>
-                  );
-                })()}
+                <td>
+                  <TargetActualCell
+                    target={r.tgtSum > 0 ? r.tgtSum : null}
+                    actual={r.cumSum}
+                    week={r.weekSum}
+                    bg={cellOf(r.rowStatus).bg}
+                    fg={cellOf(r.rowStatus).fg}
+                    strong
+                  />
+                </td>
               </tr>
             ))}
           </tbody>

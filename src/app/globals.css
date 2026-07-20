@@ -772,3 +772,31 @@ table.matrix thead th {
 .ec-box input { width: 100%; text-align: center; font-size: 18px; font-weight: 800; padding: 10px; }
 .ec-box input:disabled { opacity: 0.7; cursor: not-allowed; }
 .ec-status { margin-top: 12px; text-align: center; }
+
+/* خلية المستهدف/المنجز في التحديث الأسبوعي */
+.ta-cell {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: 10px;
+  padding: 7px 6px;
+  min-width: 118px;
+}
+.ta-box { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ta-sep { width: 1px; background: currentColor; opacity: 0.22; }
+.ta-lbl { font-size: 10px; font-weight: 700; opacity: 0.72; }
+.ta-val { font-size: 17px; font-weight: 800; line-height: 1; }
+.ta-val.strong { font-size: 18px; }
+.ta-week {
+  position: absolute;
+  top: -7px;
+  left: -6px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 1px 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
