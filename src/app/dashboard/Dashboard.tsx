@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { evaluate, fmtValue, perfStatus, statusMeta, Thresholds, DEFAULT_THRESHOLDS } from "@/lib/calc";
+import { evaluate, fmtValue, fmtNum, perfStatus, statusMeta, Thresholds, DEFAULT_THRESHOLDS } from "@/lib/calc";
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -634,6 +634,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const thr = refData.thresholds;
   const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [mode, setMode] = useState<"percent" | "number">("percent");
 
   const load = useCallback(async () => {
     const d = await fetch("/api/measurements").then((r) => r.json());
@@ -658,15 +659,27 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const indRows = useMemo(
     () =>
       indicators.map((ind, i) => {
-        const perSector = sectors.map((s) => ({ sector: s, v: achOf(s.id, ind.id, periodId) }));
+        const perSector = sectors.map((s) => {
+          const m = mMap.get(mkey(s.id, ind.id, periodId));
+          return {
+            sector: s,
+            v: evaluate(m?.actual, m?.target).achievement,
+            actual: m?.actual ?? null,
+            target: m?.target ?? null,
+          };
+        });
         const vals = perSector.map((x) => x.v).filter((v): v is number => v != null);
         const a = avg(vals);
+        const sumA = perSector.reduce((t, ps) => (ps.actual != null ? t + ps.actual : t), 0);
+        const sumT = perSector.reduce((t, ps) => (ps.target != null ? t + ps.target : t), 0);
         return {
           ind,
           num: i + 1,
           perSector,
           value: a == null ? null : Math.round(a),
           status: perfStatus(a, thr),
+          sumA,
+          sumT,
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -785,11 +798,15 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
   }
 
-  const cell = (v: number | null) => {
-    if (v == null) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b", txt: "—" };
+  const cellColor = (v: number | null) => {
+    if (v == null) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
     const meta = statusMeta(perfStatus(v, thr));
-    return { bg: meta.color, fg: meta.text, txt: `${v}%` };
+    return { bg: meta.color, fg: meta.text };
   };
+  const numTxt = (actual: number | null, target: number | null) =>
+    actual == null && target == null
+      ? "—"
+      : `${actual != null ? fmtNum(actual) : "—"} / ${target != null ? fmtNum(target) : "—"}`;
 
   return (
     <div>
@@ -800,6 +817,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="weekly-date">{today} · {periodLabel}</div>
         </div>
         <div className="weekly-actions">
+          <div className="mode-toggle">
+            <button className={mode === "percent" ? "on" : ""} onClick={() => setMode("percent")}>
+              نسبة %
+            </button>
+            <button className={mode === "number" ? "on" : ""} onClick={() => setMode("number")}>
+              أرقام
+            </button>
+          </div>
           <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
             {refData.periods.map((p) => (
               <option key={p.id} value={p.id}>
@@ -835,7 +860,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
 
       {/* مصفوفة المؤشرات × القطاعات */}
       <div className="card" style={{ marginTop: 16, overflowX: "auto" }}>
-        <h2 className="section-title">حالة المؤشرات حسب القطاع</h2>
+        <h2 className="section-title">
+          حالة المؤشرات حسب القطاع
+          {mode === "number" && (
+            <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
+              (الأرقام تعرض: المحقق / المستهدف)
+            </span>
+          )}
+        </h2>
         <table className="matrix">
           <thead>
             <tr>
@@ -843,7 +875,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
               {sectors.map((s) => (
                 <th key={s.id}>{s.name}</th>
               ))}
-              <th>المتوسط</th>
+              <th>{mode === "number" ? "الإجمالي" : "المتوسط"}</th>
             </tr>
           </thead>
           <tbody>
@@ -853,18 +885,38 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                   <span className="muted">م{r.num}.</span> {r.ind.name}
                 </td>
                 {r.perSector.map((ps) => {
-                  const c = cell(ps.v == null ? null : Math.round(ps.v));
+                  const v = ps.v == null ? null : Math.round(ps.v);
+                  const c = cellColor(v);
+                  const txt = mode === "number" ? numTxt(ps.actual, ps.target) : v == null ? "—" : `${v}%`;
                   return (
                     <td key={ps.sector.id}>
-                      <span className="cell-pill" style={{ background: c.bg, color: c.fg }}>{c.txt}</span>
+                      <span
+                        className="cell-pill"
+                        dir={mode === "number" ? "ltr" : undefined}
+                        style={{ background: c.bg, color: c.fg }}
+                      >
+                        {txt}
+                      </span>
                     </td>
                   );
                 })}
                 {(() => {
-                  const c = cell(r.value);
+                  const c = cellColor(r.value);
+                  const txt =
+                    mode === "number"
+                      ? `${fmtNum(r.sumA)} / ${fmtNum(r.sumT)}`
+                      : r.value == null
+                      ? "—"
+                      : `${r.value}%`;
                   return (
                     <td>
-                      <span className="cell-pill strong" style={{ background: c.bg, color: c.fg }}>{c.txt}</span>
+                      <span
+                        className="cell-pill strong"
+                        dir={mode === "number" ? "ltr" : undefined}
+                        style={{ background: c.bg, color: c.fg }}
+                      >
+                        {txt}
+                      </span>
                     </td>
                   );
                 })()}

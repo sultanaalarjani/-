@@ -745,3 +745,8 @@ table.matrix thead th {
 }
 .weak-pct { font-size: 20px; font-weight: 800; color: #ef4444; min-width: 52px; }
 .weak-ind { font-weight: 700; font-size: 13.5px; }
+
+/* مبدّل نسبة/أرقام في التحديث الأسبوعي */
+.mode-toggle { display: inline-flex; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; overflow: hidden; }
+.mode-toggle button { background: transparent; color: #fff; border: none; padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.mode-toggle button.on { background: #fff; color: #0e3a5f; }
