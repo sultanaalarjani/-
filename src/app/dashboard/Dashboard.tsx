@@ -116,6 +116,9 @@ export default function Dashboard({ me }: { me: Me }) {
           <button className={`tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
             النظرة العامة
           </button>
+          <button className={`tab ${tab === "weekly" ? "active" : ""}`} onClick={() => setTab("weekly")}>
+            التحديث الأسبوعي
+          </button>
           <button className={`tab ${tab === "entry" ? "active" : ""}`} onClick={() => setTab("entry")}>
             إدخال البيانات
           </button>
@@ -136,6 +139,7 @@ export default function Dashboard({ me }: { me: Me }) {
         ) : (
           <>
             {tab === "overview" && <Overview me={me} refData={refData} />}
+            {tab === "weekly" && <WeeklyReview me={me} refData={refData} />}
             {tab === "entry" && <DataEntry me={me} refData={refData} />}
             {tab === "structure" && isAdmin && <StructureManager refData={refData} reload={loadRef} />}
             {tab === "users" && isAdmin && <UsersManager refData={refData} />}
@@ -619,6 +623,276 @@ function IndicatorModal({
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ============ التحديث الأسبوعي ============ */
+function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
+  const sectors = visibleSectors(me, refData);
+  const indicators = activeIndicators(refData);
+  const thr = refData.thresholds;
+  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+
+  const load = useCallback(async () => {
+    const d = await fetch("/api/measurements").then((r) => r.json());
+    setMeasurements(d.measurements || []);
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const mMap = useMemo(() => {
+    const m = new Map<string, Measurement>();
+    for (const x of measurements) m.set(mkey(x.sectorId, x.indicatorId, x.periodId), x);
+    return m;
+  }, [measurements]);
+
+  const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  const achOf = (sId: string, iId: string, pId: string) => {
+    const m = mMap.get(mkey(sId, iId, pId));
+    return evaluate(m?.actual, m?.target).achievement;
+  };
+
+  const indRows = useMemo(
+    () =>
+      indicators.map((ind, i) => {
+        const perSector = sectors.map((s) => ({ sector: s, v: achOf(s.id, ind.id, periodId) }));
+        const vals = perSector.map((x) => x.v).filter((v): v is number => v != null);
+        const a = avg(vals);
+        return {
+          ind,
+          num: i + 1,
+          perSector,
+          value: a == null ? null : Math.round(a),
+          status: perfStatus(a, thr),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [indicators, sectors, periodId, mMap, thr]
+  );
+
+  const counts = { excellent: 0, good: 0, weak: 0 };
+  indRows.forEach((r) => {
+    if (r.status === "excellent" || r.status === "good" || r.status === "weak") counts[r.status]++;
+  });
+  const overallVals = indRows.filter((r) => r.value != null).map((r) => r.value as number);
+  const overall = overallVals.length ? Math.round(avg(overallVals)!) : null;
+
+  const weakItems: { indicator: string; sector: string; v: number }[] = [];
+  for (const r of indRows)
+    for (const ps of r.perSector)
+      if (ps.v != null && perfStatus(ps.v, thr) === "weak")
+        weakItems.push({ indicator: r.ind.name, sector: ps.sector.name, v: Math.round(ps.v) });
+  weakItems.sort((a, b) => a.v - b.v);
+
+  const periodLabel = refData.periods.find((p) => p.id === periodId)?.label || "";
+  const today = new Date().toLocaleDateString("ar-SA-u-nu-latn", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+
+  // تقرير PDF كامل (كل الفترات وكل التفاصيل) عبر نافذة طباعة
+  function printPDF() {
+    const sections = refData.periods
+      .map((p) => {
+        const rows = sectors
+          .map((s) =>
+            indicators
+              .map((ind) => {
+                const m = mMap.get(mkey(s.id, ind.id, p.id));
+                const r = evaluate(m?.actual, m?.target, thr);
+                const meta = statusMeta(r.status);
+                return `<tr>
+                  <td>${esc(s.name)}</td>
+                  <td>${esc(ind.name)}</td>
+                  <td class="c">${ind.unit === "percent" ? "نسبة" : "عدد"}</td>
+                  <td class="c">${m?.target != null ? m.target : "—"}</td>
+                  <td class="c">${m?.actual != null ? m.actual : "—"}</td>
+                  <td class="c">${r.achievement != null ? Math.round(r.achievement) + "%" : "—"}</td>
+                  <td class="c" style="background:${meta.color};color:${meta.text}">${meta.label}</td>
+                </tr>`;
+              })
+              .join("")
+          )
+          .join("");
+        return `<h2>${esc(p.label)}</h2>
+          <table><thead><tr><th>القطاع</th><th>المؤشر</th><th>الوحدة</th><th>المستهدف</th><th>المحقق</th><th>الإنجاز</th><th>الحالة</th></tr></thead><tbody>${rows}</tbody></table>`;
+      })
+      .join("");
+    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الأداء</title>
+      <style>
+        *{font-family:"Segoe UI",Tahoma,Arial,sans-serif}
+        body{padding:20px;color:#1a2233}
+        h1{color:#0e3a5f;margin:0 0 2px;font-size:22px}
+        .sub{color:#5b6b82;margin:0 0 14px;font-size:12px}
+        h2{color:#0e3a5f;font-size:15px;margin:18px 0 6px;border-right:4px solid #22a3c4;padding-right:8px}
+        table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11.5px}
+        th,td{border:1px solid #d4dbe6;padding:5px 7px;text-align:right}
+        th{background:#eef4f8}
+        td.c{text-align:center}
+        @media print{h2{page-break-after:avoid}tr{page-break-inside:avoid}}
+      </style></head><body>
+      <h1>تقرير حالة المؤشرات — إدارة عمليات الأداء</h1>
+      <p class="sub">${esc(today)} · الإنجاز العام: ${overall != null ? overall + "%" : "—"}</p>
+      ${sections}
+      <script>window.onload=function(){window.print()}</script>
+      </body></html>`;
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    }
+  }
+
+  function exportExcel() {
+    const header = ["القطاع", "المؤشر", "الوحدة", "الفترة", "المستهدف", "المحقق", "نسبة الإنجاز %", "الحالة"];
+    const rows: string[][] = [];
+    for (const s of sectors)
+      for (const ind of indicators)
+        for (const p of refData.periods) {
+          const m = mMap.get(mkey(s.id, ind.id, p.id));
+          const r = evaluate(m?.actual, m?.target, thr);
+          rows.push([
+            s.name,
+            ind.name,
+            ind.unit === "percent" ? "نسبة" : "عدد",
+            p.label,
+            m?.target != null ? String(m.target) : "",
+            m?.actual != null ? String(m.actual) : "",
+            r.achievement != null ? String(Math.round(r.achievement)) : "",
+            statusMeta(r.status).label,
+          ]);
+        }
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(","))
+      .join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "تقرير-الأداء-الكامل.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (refData.periods.length === 0) {
+    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
+  }
+
+  const cell = (v: number | null) => {
+    if (v == null) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b", txt: "—" };
+    const meta = statusMeta(perfStatus(v, thr));
+    return { bg: meta.color, fg: meta.text, txt: `${v}%` };
+  };
+
+  return (
+    <div>
+      {/* شريط العنوان للعرض الأسبوعي */}
+      <div className="weekly-banner">
+        <div>
+          <div className="weekly-title">التحديث الأسبوعي لحالة المؤشرات</div>
+          <div className="weekly-date">{today} · {periodLabel}</div>
+        </div>
+        <div className="weekly-actions">
+          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+            {refData.periods.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <button className="btn btn-sm btn-ghost" onClick={load}>تحديث</button>
+          <button className="btn btn-sm" onClick={printPDF}>🖨 حفظ PDF</button>
+          <button className="btn btn-sm" onClick={exportExcel}>⬇ Excel</button>
+        </div>
+      </div>
+
+      {/* ملخص سريع */}
+      <div className="kpis" style={{ marginTop: 14 }}>
+        <div className="kpi">
+          <div className="v" style={{ color: "#22d3ee" }}>{overall != null ? `${overall}%` : "—"}</div>
+          <div className="l">الإنجاز العام</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
+          <div className="l">وفق المسار</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: GAUGE.good }}>{counts.good}</div>
+          <div className="l">متعثرة جزئيًا</div>
+        </div>
+        <div className="kpi">
+          <div className="v" style={{ color: GAUGE.weak }}>{counts.weak}</div>
+          <div className="l">متعثرة</div>
+        </div>
+      </div>
+
+      {/* مصفوفة المؤشرات × القطاعات */}
+      <div className="card" style={{ marginTop: 16, overflowX: "auto" }}>
+        <h2 className="section-title">حالة المؤشرات حسب القطاع</h2>
+        <table className="matrix">
+          <thead>
+            <tr>
+              <th style={{ textAlign: "right", minWidth: 220 }}>المؤشر</th>
+              {sectors.map((s) => (
+                <th key={s.id}>{s.name}</th>
+              ))}
+              <th>المتوسط</th>
+            </tr>
+          </thead>
+          <tbody>
+            {indRows.map((r) => (
+              <tr key={r.ind.id}>
+                <td style={{ textAlign: "right" }}>
+                  <span className="muted">م{r.num}.</span> {r.ind.name}
+                </td>
+                {r.perSector.map((ps) => {
+                  const c = cell(ps.v == null ? null : Math.round(ps.v));
+                  return (
+                    <td key={ps.sector.id}>
+                      <span className="cell-pill" style={{ background: c.bg, color: c.fg }}>{c.txt}</span>
+                    </td>
+                  );
+                })}
+                {(() => {
+                  const c = cell(r.value);
+                  return (
+                    <td>
+                      <span className="cell-pill strong" style={{ background: c.bg, color: c.fg }}>{c.txt}</span>
+                    </td>
+                  );
+                })()}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* أبرز المؤشرات المتعثرة للنقاش */}
+      {weakItems.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 className="section-title" style={{ color: GAUGE.weak }}>
+            أبرز المؤشرات المتعثرة ({weakItems.length})
+          </h2>
+          <div className="weak-grid">
+            {weakItems.slice(0, 12).map((w, i) => (
+              <div key={i} className="weak-item">
+                <span className="weak-pct">{w.v}%</span>
+                <div>
+                  <div className="weak-ind">{w.indicator}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>{w.sector}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
