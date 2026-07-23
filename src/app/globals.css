@@ -891,3 +891,79 @@ table.matrix thead th {
   .kpi .v { font-size: 18px; }
   .weekly-title { font-size: 16px; }
 }
+
+/* ============================================================
+   الثيمات (فاتح / أسود / رمادي / أزرق) + مبدّل الثيم
+   ============================================================ */
+.theme-select {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.theme-select option { color: #111; }
+
+:root[data-theme="light"] {
+  --bg: #eef2f7; --bg2: #ffffff; --panel: #ffffff; --panel-2: #f1f5f9;
+  --text: #0f1c33; --muted: #5b6b82; --border: rgba(0, 0, 0, 0.10);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --glow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+:root[data-theme="light"] body {
+  background: radial-gradient(1100px 560px at 80% -10%, rgba(59, 130, 246, 0.07), transparent), #eef2f7;
+}
+:root[data-theme="light"] .topbar { background: rgba(255, 255, 255, 0.85); }
+:root[data-theme="light"] .tab { background: #ffffff; }
+:root[data-theme="light"] .theme-select { background: rgba(0, 0, 0, 0.04); }
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea { background: #f7fafc; }
+
+:root[data-theme="black"] {
+  --bg: #000000; --bg2: #0a0a0a; --panel: #121212; --panel-2: #1a1a1a;
+  --text: #f2f2f2; --muted: #9a9a9a; --border: rgba(255, 255, 255, 0.10);
+}
+:root[data-theme="black"] body { background: #000000; }
+:root[data-theme="black"] .topbar { background: rgba(0, 0, 0, 0.85); }
+
+:root[data-theme="slate"] {
+  --bg: #1e293b; --bg2: #243244; --panel: #2a3a52; --panel-2: #334155;
+  --text: #e8eefc; --muted: #a7b6cc; --border: rgba(255, 255, 255, 0.10);
+}
+:root[data-theme="slate"] body { background: #1e293b; }
+:root[data-theme="slate"] .topbar { background: rgba(30, 41, 59, 0.85); }
+
+:root[data-theme="royal"] {
+  --bg: #0a1a3f; --bg2: #0e2150; --panel: #132a63; --panel-2: #183472;
+  --text: #eaf0ff; --muted: #9fb2dd; --border: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="royal"] body {
+  background: radial-gradient(1000px 520px at 80% -10%, rgba(59, 130, 246, 0.28), transparent), #0a1a3f;
+}
+:root[data-theme="royal"] .topbar { background: rgba(10, 26, 63, 0.85); }
+
+/* محرّر حالات الأداء */
+.band-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.band-color { width: 46px; height: 40px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; }
+.band-label { flex: 1; min-width: 140px; }
+.band-from { display: flex; align-items: center; gap: 6px; }
+.band-from input { width: 84px; }
+
+/* ============================================================
+   الجوال: عدّادات النظرة العامة 3 في الصف
+   ============================================================ */
+@media (max-width: 768px) {
+  .gauge-grid { grid-template-columns: repeat(3, 1fr) !important; gap: 8px; }
+  .gauge-box { padding: 8px 6px; border-radius: 12px; }
+  .gauge-box .gauge-head { margin-bottom: 2px; }
+  .gauge-num { font-size: 10px; }
+  .gauge-name { font-size: 10px; line-height: 1.35; height: 42px; overflow: hidden; }
+  .gauge-status { font-size: 11px; }
+  .gauge-box .gauge-name + div span { font-size: 18px !important; }
+}
+@media (max-width: 380px) {
+  .gauge-grid { grid-template-columns: repeat(2, 1fr) !important; }
+}

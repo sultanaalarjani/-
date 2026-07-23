@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { evaluate, fmtValue, fmtNum, perfStatus, statusMeta, Thresholds, DEFAULT_THRESHOLDS } from "@/lib/calc";
+import { evaluate, fmtValue, fmtNum, bandOf, tint, Band, DEFAULT_BANDS } from "@/lib/calc";
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -69,7 +69,7 @@ interface RefData {
   sectors: Sector[];
   indicators: Indicator[];
   periods: Period[];
-  thresholds: Thresholds;
+  statuses: Band[]; // حالات الأداء القابلة للتخصيص
   targets: Record<string, number>; // المستهدفات السنوية لكل (قطاع|مؤشر)
 }
 
@@ -77,7 +77,7 @@ const EMPTY_REF: RefData = {
   sectors: [],
   indicators: [],
   periods: [],
-  thresholds: DEFAULT_THRESHOLDS,
+  statuses: DEFAULT_BANDS,
   targets: {},
 };
 
@@ -85,10 +85,7 @@ function tkey(sectorId: string, indicatorId: string) {
   return `${sectorId}|${indicatorId}`;
 }
 
-const GAUGE = { weak: "#ef4444", good: "#f59e0b", excellent: "#22c55e", track: "rgba(255,255,255,0.08)" };
-function statusColor(s: string) {
-  return s === "excellent" ? GAUGE.excellent : s === "good" ? GAUGE.good : s === "weak" ? GAUGE.weak : "#475569";
-}
+const GAUGE_TRACK = "rgba(255,255,255,0.08)";
 
 export default function Dashboard({ me }: { me: Me }) {
   const router = useRouter();
@@ -96,6 +93,20 @@ export default function Dashboard({ me }: { me: Me }) {
   const [tab, setTab] = useState<string>("overview");
   const [refData, setRefData] = useState<RefData>(EMPTY_REF);
   const [loaded, setLoaded] = useState(false);
+  const [theme, setTheme] = useState("dark");
+
+  useEffect(() => {
+    const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
+    if (saved) setTheme(saved);
+  }, []);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
 
   const loadRef = useCallback(async () => {
     const [s, i, p, st, tg] = await Promise.all([
@@ -109,9 +120,7 @@ export default function Dashboard({ me }: { me: Me }) {
       sectors: s.sectors || [],
       indicators: i.indicators || [],
       periods: p.periods || [],
-      thresholds: st.settings
-        ? { good: st.settings.goodThreshold, excellent: st.settings.excellentThreshold }
-        : DEFAULT_THRESHOLDS,
+      statuses: st.settings?.statuses?.length ? st.settings.statuses : DEFAULT_BANDS,
       targets: tg.targets || {},
     });
     setLoaded(true);
@@ -138,6 +147,19 @@ export default function Dashboard({ me }: { me: Me }) {
               {isAdmin ? "مدير الإدارة" : "مدير قطاع"}
             </span>
           </span>
+          <select
+            className="theme-select"
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+            title="الثيم / لون الخلفية"
+            aria-label="الثيم"
+          >
+            <option value="dark">🌙 داكن</option>
+            <option value="light">☀️ فاتح</option>
+            <option value="black">⚫ أسود</option>
+            <option value="slate">🌫️ رمادي</option>
+            <option value="royal">🔵 أزرق</option>
+          </select>
           <button className="btn btn-ghost btn-sm" onClick={logout}>
             خروج
           </button>
@@ -173,8 +195,8 @@ export default function Dashboard({ me }: { me: Me }) {
           <>
             {tab === "overview" && <Overview me={me} refData={refData} />}
             {tab === "weekly" && <WeeklyReview me={me} refData={refData} />}
-            {tab === "entry" && <DataEntry me={me} refData={refData} reload={loadRef} />}
-            {tab === "structure" && isAdmin && <StructureManager refData={refData} reload={loadRef} />}
+            {tab === "entry" && <EntrySection me={me} refData={refData} reload={loadRef} />}
+            {tab === "structure" && isAdmin && <SectorsManager refData={refData} reload={loadRef} />}
             {tab === "users" && isAdmin && <UsersManager refData={refData} />}
           </>
         )}
@@ -210,11 +232,11 @@ function arc(cx: number, cy: number, r: number, v0: number, v1: number, max: num
 
 function Gauge({
   value,
-  thresholds,
+  bands,
   max = 120,
 }: {
   value: number | null;
-  thresholds: Thresholds;
+  bands: Band[];
   max?: number;
 }) {
   const cx = 100;
@@ -222,19 +244,30 @@ function Gauge({
   const r = 72;
   const sw = 16;
   const v = value == null ? 0 : Math.max(0, Math.min(value, max));
-  const status = perfStatus(value, thresholds);
-  const color = statusColor(status);
+  const color = bandOf(value, bands)?.color ?? "#64748b";
   const needleAngle = 180 - (v / max) * 180;
   const [nx, ny] = polar(cx, cy, r - 6, needleAngle);
+  // رسم أقواس ملوّنة من الحالات (كل حالة من نسبتها إلى بداية التالية)
+  const sorted = [...bands].sort((a, b) => a.from - b.from);
 
   return (
     <div style={{ position: "relative" }}>
       <svg viewBox="0 0 200 118" width="100%" style={{ display: "block" }}>
-        {/* المناطق الثلاث */}
-        <path d={arc(cx, cy, r, 0, thresholds.good, max)} stroke={GAUGE.weak} strokeWidth={sw} fill="none" strokeLinecap="round" />
-        <path d={arc(cx, cy, r, thresholds.good, thresholds.excellent, max)} stroke={GAUGE.good} strokeWidth={sw} fill="none" />
-        <path d={arc(cx, cy, r, thresholds.excellent, max, max)} stroke={GAUGE.excellent} strokeWidth={sw} fill="none" strokeLinecap="round" />
-        {/* الإبرة */}
+        <path d={arc(cx, cy, r, 0, max, max)} stroke={GAUGE_TRACK} strokeWidth={sw} fill="none" strokeLinecap="round" />
+        {sorted.map((b, i) => {
+          const to = i < sorted.length - 1 ? sorted[i + 1].from : max;
+          if (to <= b.from) return null;
+          return (
+            <path
+              key={i}
+              d={arc(cx, cy, r, b.from, to, max)}
+              stroke={b.color}
+              strokeWidth={sw}
+              fill="none"
+              strokeLinecap={i === 0 || i === sorted.length - 1 ? "round" : "butt"}
+            />
+          );
+        })}
         {value != null && (
           <>
             <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="#e8eefc" strokeWidth={3} strokeLinecap="round" />
@@ -252,18 +285,29 @@ function Gauge({
 }
 
 /* ============ النظرة العامة ============ */
+const SCOPES: { key: string; label: string; q: number | null }[] = [
+  { key: "year", label: "السنة كاملة", q: null },
+  { key: "q1", label: "الربع الأول", q: 1 },
+  { key: "q2", label: "الربع الثاني", q: 2 },
+  { key: "q3", label: "الربع الثالث", q: 3 },
+  { key: "q4", label: "الربع الرابع", q: 4 },
+];
+function periodQuarter(p: Period): number | null {
+  if (!p.weekStart) return null;
+  const m = Number(p.weekStart.slice(5, 7)) - 1;
+  return Number.isFinite(m) ? Math.floor(m / 3) + 1 : null;
+}
+
 function Overview({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
-  const thr = refData.thresholds;
-  const [periodId, setPeriodId] = useState(refData.periods[0]?.id || "");
+  const bands = refData.statuses;
+  const [scope, setScope] = useState("year");
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
   const [openSector, setOpenSector] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<"excellent" | "good" | "weak" | null>(null);
-  const [openIndicator, setOpenIndicator] = useState<
-    (Indicator & { num: number; value: number | null; status: string }) | null
-  >(null);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null); // اسم الحالة
+  const [openIndicator, setOpenIndicator] = useState<(Indicator & { num: number }) | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -271,7 +315,6 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     setMeasurements(d.measurements || []);
     setLoading(false);
   }, []);
-
   useEffect(() => {
     load();
     const t = setInterval(load, 20000);
@@ -285,46 +328,62 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
   }, [measurements]);
 
   const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+
+  // الأسابيع ضمن النطاق المختار (سنة أو ربع)
+  const scopeWeeks = useMemo(() => {
+    const q = SCOPES.find((x) => x.key === scope)?.q ?? null;
+    if (q == null) return refData.periods;
+    return refData.periods.filter((p) => periodQuarter(p) === q);
+  }, [scope, refData.periods]);
+
+  // نسبة إنجاز (قطاع×مؤشر) = مجموع المنجز في النطاق ÷ المستهدف السنوي
   const achOf = useCallback(
-    (sectorId: string, indId: string, pId: string): number | null => {
-      const m = mMap.get(mkey(sectorId, indId, pId));
-      return evaluate(m?.actual, m?.target).achievement;
+    (sectorId: string, indId: string): number | null => {
+      const target = refData.targets[tkey(sectorId, indId)] ?? null;
+      if (!target || target <= 0) return null;
+      let sum = 0;
+      let has = false;
+      for (const p of scopeWeeks) {
+        const a = mMap.get(mkey(sectorId, indId, p.id))?.actual;
+        if (a != null) {
+          sum += a;
+          has = true;
+        }
+      }
+      return has ? (sum / target) * 100 : null;
     },
-    [mMap]
+    [mMap, scopeWeeks, refData.targets]
   );
 
-  // نسبة كل مؤشر (متوسط القطاعات) للفترة المختارة
   const indData = useMemo(
     () =>
       indicators.map((ind, i) => {
-        const vals = sectors
-          .map((s) => achOf(s.id, ind.id, periodId))
-          .filter((v): v is number => v != null);
+        const vals = sectors.map((s) => achOf(s.id, ind.id)).filter((v): v is number => v != null);
         const a = avg(vals);
         const value = a == null ? null : Math.round(a);
-        const status = perfStatus(a, thr);
-        return { ...ind, num: i + 1, value, status };
+        const band = bandOf(a, bands);
+        return { ...ind, num: i + 1, value, band, bandLabel: band?.label ?? null };
       }),
-    [indicators, sectors, periodId, achOf, thr]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [indicators, sectors, achOf, bands]
   );
 
-  const counts = useMemo(() => {
-    const c = { excellent: 0, good: 0, weak: 0 };
-    indData.forEach((d) => {
-      if (d.status in c) c[d.status as keyof typeof c]++;
-    });
-    return c;
-  }, [indData]);
+  const bandCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const b of bands) map[b.label] = 0;
+    for (const d of indData) if (d.bandLabel) map[d.bandLabel] = (map[d.bandLabel] || 0) + 1;
+    return map;
+  }, [indData, bands]);
 
   const overall = useMemo(() => {
     const vals = indData.filter((d) => d.value != null).map((d) => d.value as number);
     return vals.length ? Math.round(avg(vals)!) : null;
   }, [indData]);
 
+  const shownInd = statusFilter ? indData.filter((d) => d.bandLabel === statusFilter) : indData;
+
   function sectorAch(sectorId: string): number | null {
-    const vals = indicators
-      .map((ind) => achOf(sectorId, ind.id, periodId))
-      .filter((v): v is number => v != null);
+    const vals = indicators.map((ind) => achOf(sectorId, ind.id)).filter((v): v is number => v != null);
     return avg(vals) == null ? null : Math.round(avg(vals)!);
   }
 
@@ -333,9 +392,9 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     const rows: string[][] = [];
     for (const s of sectors)
       for (const ind of indicators)
-        for (const p of refData.periods) {
+        for (const p of scopeWeeks) {
           const m = mMap.get(mkey(s.id, ind.id, p.id));
-          const rr = evaluate(m?.actual, m?.target, thr);
+          const rr = evaluate(m?.actual, m?.target, bands);
           rows.push([
             s.name,
             ind.name,
@@ -358,19 +417,15 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     URL.revokeObjectURL(url);
   }
 
-  if (refData.periods.length === 0) {
-    return <div className="empty">لا توجد فترات. أضفها من تبويب الهيكل التنظيمي.</div>;
-  }
-
   return (
     <div>
       <div className="toolbar">
         <div>
-          <label style={{ marginBottom: 4 }}>الأسبوع</label>
-          <select value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-            {refData.periods.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
+          <label style={{ marginBottom: 4 }}>النطاق</label>
+          <select value={scope} onChange={(e) => setScope(e.target.value)}>
+            {SCOPES.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
               </option>
             ))}
           </select>
@@ -384,7 +439,6 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         </button>
       </div>
 
-      {/* المربعات الخمسة */}
       <div className="kpis">
         <div className="kpi">
           <div className="v" style={{ color: "#22d3ee" }}>{overall != null ? `${overall}%` : "—"}</div>
@@ -394,56 +448,52 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="v">{indicators.length}</div>
           <div className="l">عدد المؤشرات</div>
         </div>
-        {(["excellent", "good", "weak"] as const).map((st) => (
+        {bands.map((b) => (
           <div
-            key={st}
-            className={`kpi clickable${statusFilter === st ? " active" : ""}`}
-            style={statusFilter === st ? { borderColor: statusColor(st) } : undefined}
-            onClick={() => setStatusFilter(statusFilter === st ? null : st)}
+            key={b.label}
+            className={`kpi clickable${statusFilter === b.label ? " active" : ""}`}
+            style={statusFilter === b.label ? { borderColor: b.color } : undefined}
+            onClick={() => setStatusFilter(statusFilter === b.label ? null : b.label)}
           >
-            <div className="v" style={{ color: statusColor(st) }}>{counts[st]}</div>
-            <div className="l">
-              {st === "excellent" ? "المؤشرات وفق المسار" : st === "good" ? "المؤشرات المتعثرة جزئيًا" : "المؤشرات المتعثرة"}
-            </div>
+            <div className="v" style={{ color: b.color }}>{bandCounts[b.label] || 0}</div>
+            <div className="l">{b.label}</div>
           </div>
         ))}
       </div>
       {statusFilter && (
         <div className="filter-note">
-          عرض المؤشرات: {statusFilter === "excellent" ? "وفق المسار" : statusFilter === "good" ? "متعثرة جزئيًا" : "متعثرة"}
+          عرض حالة: <strong>{statusFilter}</strong> فقط
           <button className="btn btn-ghost btn-sm" style={{ marginInlineStart: 10 }} onClick={() => setStatusFilter(null)}>
-            إلغاء التصفية
+            إظهار الكل
           </button>
         </div>
       )}
 
-      {/* المؤشرات التسعة كعدّادات */}
       {loading ? (
         <div className="empty">جارٍ التحميل...</div>
+      ) : shownInd.length === 0 ? (
+        <div className="empty">لا توجد مؤشرات مطابقة.</div>
       ) : (
         <div className="gauge-grid">
-          {indData.map((ind) => {
-            const dim = statusFilter != null && ind.status !== statusFilter;
-            return (
-              <div
-                key={ind.id}
-                className={`gauge-box clickable${dim ? " dimmed" : ""}`}
-                style={{ borderTopColor: statusColor(ind.status) }}
-                onClick={() => setOpenIndicator(ind)}
-              >
-                <div className="gauge-head">
-                  <span className="gauge-num">المؤشر {ind.num}</span>
-                </div>
-                <div className="gauge-name" title={ind.name}>
-                  {ind.name}
-                </div>
-                <Gauge value={ind.value} thresholds={thr} />
-                <div className="gauge-status" style={{ color: statusColor(ind.status) }}>
-                  {statusMeta(ind.status).label}
-                </div>
+          {shownInd.map((ind) => (
+            <div
+              key={ind.id}
+              className="gauge-box clickable"
+              style={{ borderTopColor: ind.band?.color ?? "#475569" }}
+              onClick={() => setOpenIndicator(ind)}
+            >
+              <div className="gauge-head">
+                <span className="gauge-num">المؤشر {ind.num}</span>
               </div>
-            );
-          })}
+              <div className="gauge-name" title={ind.name}>
+                {ind.name}
+              </div>
+              <Gauge value={ind.value} bands={bands} />
+              <div className="gauge-status" style={{ color: ind.band?.color ?? "#64748b" }}>
+                {ind.bandLabel ?? "—"}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -451,34 +501,35 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
         <IndicatorModal
           indicator={openIndicator}
           sectors={sectors}
-          periods={refData.periods}
+          periods={scopeWeeks}
           mMap={mMap}
-          thr={thr}
+          bands={bands}
           onClose={() => setOpenIndicator(null)}
         />
       )}
 
-      {/* تفاصيل القطاعات */}
       <h2 className="section-title" style={{ marginTop: 28 }}>
         تفاصيل القطاعات
       </h2>
       <div className="sector-list">
         {sectors.map((s) => {
           const ach = sectorAch(s.id);
-          const status = perfStatus(ach, thr);
-          const meta = statusMeta(status);
+          const band = bandOf(ach, bands);
           const isOpen = openSector === s.id;
           return (
             <div key={s.id} className="sector-panel">
               <button className="sector-head" onClick={() => setOpenSector(isOpen ? null : s.id)}>
                 <span className="sector-arrow">{isOpen ? "▼" : "◀"}</span>
                 <span className="sector-name">{s.name}</span>
-                <span className="sector-pct" style={{ background: meta.color, color: meta.text }}>
+                <span
+                  className="sector-pct"
+                  style={{ background: band ? tint(band.color) : "rgba(255,255,255,0.05)", color: band?.color ?? "#64748b" }}
+                >
                   {ach != null ? `${ach}%` : "—"}
                 </span>
               </button>
               {isOpen && (
-                <SectorDetail sector={s} indicators={indicators} periods={refData.periods} mMap={mMap} thr={thr} />
+                <SectorDetail sector={s} indicators={indicators} periods={scopeWeeks} mMap={mMap} bands={bands} />
               )}
             </div>
           );
@@ -493,13 +544,13 @@ function SectorDetail({
   indicators,
   periods,
   mMap,
-  thr,
+  bands,
 }: {
   sector: Sector;
   indicators: Indicator[];
   periods: Period[];
   mMap: Map<string, Measurement>;
-  thr: Thresholds;
+  bands: Band[];
 }) {
   return (
     <div className="sector-detail" style={{ overflowX: "auto" }}>
@@ -529,15 +580,15 @@ function SectorDetail({
               </td>
               {periods.map((p) => {
                 const m = mMap.get(mkey(sector.id, ind.id, p.id));
-                const r = evaluate(m?.actual, m?.target, thr);
+                const r = evaluate(m?.actual, m?.target, bands);
                 return (
                   <ValueCells
                     key={p.id}
                     target={fmtValue(m?.target, ind.unit)}
                     actual={fmtValue(m?.actual, ind.unit)}
                     pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
+                    bg={r.bg}
                     color={r.color}
-                    text={r.text}
                   />
                 );
               })}
@@ -563,20 +614,20 @@ function ValueCells({
   target,
   actual,
   pct,
+  bg,
   color,
-  text,
 }: {
   target: string;
   actual: string;
   pct: string;
+  bg: string;
   color: string;
-  text: string;
 }) {
   return (
     <>
       <td className="mini">{target}</td>
       <td className="mini">{actual}</td>
-      <td className="mini" style={{ background: color, color: text, fontWeight: 700 }}>
+      <td className="mini" style={{ background: bg, color, fontWeight: 700 }}>
         {pct}
       </td>
     </>
@@ -588,14 +639,14 @@ function IndicatorModal({
   sectors,
   periods,
   mMap,
-  thr,
+  bands,
   onClose,
 }: {
   indicator: Indicator & { num: number };
   sectors: Sector[];
   periods: Period[];
   mMap: Map<string, Measurement>;
-  thr: Thresholds;
+  bands: Band[];
   onClose: () => void;
 }) {
   return (
@@ -638,15 +689,15 @@ function IndicatorModal({
                   <td className="ind-col">{s.name}</td>
                   {periods.map((p) => {
                     const m = mMap.get(mkey(s.id, indicator.id, p.id));
-                    const r = evaluate(m?.actual, m?.target, thr);
+                    const r = evaluate(m?.actual, m?.target, bands);
                     return (
                       <ValueCells
                         key={p.id}
                         target={fmtValue(m?.target, indicator.unit)}
                         actual={fmtValue(m?.actual, indicator.unit)}
                         pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
+                        bg={r.bg}
                         color={r.color}
-                        text={r.text}
                       />
                     );
                   })}
@@ -699,7 +750,7 @@ function TargetActualCell({
 function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
-  const thr = refData.thresholds;
+  const bands = refData.statuses;
   const [date, setDate] = useState(todayISO());
   const week = weekOf(date);
   const period = refData.periods.find((p) => p.weekStart === week.weekStart);
@@ -741,25 +792,23 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
         const target = refData.targets[tkey(s.id, ind.id)] ?? null;
         const week = mMap.get(mkey(s.id, ind.id, periodId))?.actual ?? null; // جهات هذا الأسبوع
         const cum = cumOf(s.id, ind.id); // التراكمي حتى الآن
-        const status =
-          target && target > 0 ? perfStatus((cum / target) * 100, thr) : ("none" as const);
-        return { sector: s, week, cum, target, status };
+        const band = target && target > 0 ? bandOf((cum / target) * 100, bands) : null;
+        return { sector: s, week, cum, target, band };
       });
       const weekSum = perSector.reduce((t, ps) => (ps.week != null ? t + ps.week : t), 0);
       const cumSum = perSector.reduce((t, ps) => t + ps.cum, 0);
       const tgtSum = perSector.reduce((t, ps) => (ps.target != null ? t + ps.target : t), 0);
-      const rowStatus = tgtSum > 0 ? perfStatus((cumSum / tgtSum) * 100, thr) : ("none" as const);
-      return { ind, num: i + 1, perSector, weekSum, cumSum, tgtSum, rowStatus };
+      const rowBand = tgtSum > 0 ? bandOf((cumSum / tgtSum) * 100, bands) : null;
+      return { ind, num: i + 1, perSector, weekSum, cumSum, tgtSum, rowBand };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicators, sectors, periodId, curOrder, mMap, thr, refData.targets, periodsSorted]);
+  }, [indicators, sectors, periodId, curOrder, mMap, bands, refData.targets, periodsSorted]);
 
-  // عدّ الخلايا حسب حالة التقدّم التراكمي
-  const counts = { excellent: 0, good: 0, weak: 0 };
+  // عدّ الخلايا حسب الحالة (التقدّم التراكمي)
+  const bandCounts: Record<string, number> = {};
+  for (const b of bands) bandCounts[b.label] = 0;
   for (const r of indRows)
-    for (const ps of r.perSector)
-      if (ps.status === "excellent" || ps.status === "good" || ps.status === "weak")
-        counts[ps.status]++;
+    for (const ps of r.perSector) if (ps.band) bandCounts[ps.band.label] = (bandCounts[ps.band.label] || 0) + 1;
 
   // إجماليات
   let weekTotal = 0;
@@ -798,8 +847,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
             indicators
               .map((ind) => {
                 const m = mMap.get(mkey(s.id, ind.id, p.id));
-                const r = evaluate(m?.actual, m?.target, thr);
-                const meta = statusMeta(r.status);
+                const r = evaluate(m?.actual, m?.target, bands);
                 return `<tr>
                   <td>${esc(s.name)}</td>
                   <td>${esc(ind.name)}</td>
@@ -807,7 +855,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                   <td class="c">${m?.target != null ? m.target : "—"}</td>
                   <td class="c">${m?.actual != null ? m.actual : "—"}</td>
                   <td class="c">${r.achievement != null ? Math.round(r.achievement) + "%" : "—"}</td>
-                  <td class="c" style="background:${meta.color};color:${meta.text}">${meta.label}</td>
+                  <td class="c" style="background:${r.bg};color:${r.color}">${r.label}</td>
                 </tr>`;
               })
               .join("")
@@ -849,7 +897,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       for (const ind of indicators)
         for (const p of refData.periods) {
           const m = mMap.get(mkey(s.id, ind.id, p.id));
-          const r = evaluate(m?.actual, m?.target, thr);
+          const r = evaluate(m?.actual, m?.target, bands);
           rows.push([
             s.name,
             ind.name,
@@ -858,7 +906,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
             m?.target != null ? String(m.target) : "",
             m?.actual != null ? String(m.actual) : "",
             r.achievement != null ? String(Math.round(r.achievement)) : "",
-            statusMeta(r.status).label,
+            r.label,
           ]);
         }
     const csv = [header, ...rows]
@@ -873,11 +921,8 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
     URL.revokeObjectURL(url);
   }
 
-  const cellOf = (status: string) => {
-    if (status === "none" || !status) return { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
-    const meta = statusMeta(status as "excellent" | "good" | "weak");
-    return { bg: meta.color, fg: meta.text };
-  };
+  const cellOf = (band: Band | null) =>
+    band ? { bg: tint(band.color), fg: band.color } : { bg: "rgba(255,255,255,0.04)", fg: "#64748b" };
 
   return (
     <div>
@@ -918,18 +963,12 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           </div>
           <div className="l">التراكمي / المستهدف السنوي</div>
         </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.excellent }}>{counts.excellent}</div>
-          <div className="l">وفق المسار</div>
-        </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.good }}>{counts.good}</div>
-          <div className="l">متعثرة جزئيًا</div>
-        </div>
-        <div className="kpi">
-          <div className="v" style={{ color: GAUGE.weak }}>{counts.weak}</div>
-          <div className="l">متعثرة</div>
-        </div>
+        {bands.map((b) => (
+          <div className="kpi" key={b.label}>
+            <div className="v" style={{ color: b.color }}>{bandCounts[b.label] || 0}</div>
+            <div className="l">{b.label}</div>
+          </div>
+        ))}
       </div>
 
       {/* مصفوفة المؤشرات × القطاعات */}
@@ -957,7 +996,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                   <span className="muted">م{r.num}.</span> {r.ind.name}
                 </td>
                 {r.perSector.map((ps) => {
-                  const c = cellOf(ps.status);
+                  const c = cellOf(ps.band);
                   return (
                     <td key={ps.sector.id}>
                       <TargetActualCell
@@ -975,8 +1014,8 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                     target={r.tgtSum > 0 ? r.tgtSum : null}
                     actual={r.cumSum}
                     week={r.weekSum}
-                    bg={cellOf(r.rowStatus).bg}
-                    fg={cellOf(r.rowStatus).fg}
+                    bg={cellOf(r.rowBand).bg}
+                    fg={cellOf(r.rowBand).fg}
                     strong
                   />
                 </td>
@@ -988,7 +1027,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
 
       {/* أبرز إنجازات هذا الأسبوع */}
       <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="section-title" style={{ color: GAUGE.excellent }}>
+        <h2 className="section-title" style={{ color: "#22c55e" }}>
           أبرز إنجازات هذا الأسبوع ({weekWins.length})
         </h2>
         {weekWins.length === 0 ? (
@@ -1027,7 +1066,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
 function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
-  const thr = refData.thresholds;
+  const bands = refData.statuses;
   const isAdmin = me.role === "admin";
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
   const [date, setDate] = useState(todayISO());
@@ -1167,7 +1206,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
         {indicators.map((ind, i) => {
           const tv = vals[ind.id]?.target ?? "";
           const av = vals[ind.id]?.actual ?? "";
-          const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), thr);
+          const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), bands);
           return (
             <div className="entry-card" key={ind.id}>
               <div className="ec-title">
@@ -1201,7 +1240,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
                 </div>
               </div>
               <div className="ec-status">
-                <span className="badge" style={{ background: r.color, color: r.text }}>
+                <span className="badge" style={{ background: r.bg, color: r.color }}>
                   {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "لم يُعبّأ"}
                 </span>
               </div>
@@ -1218,35 +1257,38 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   );
 }
 
-/* ============ الهيكل التنظيمي ============ */
-function StructureManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [sub, setSub] = useState<"sectors" | "indicators" | "targets" | "periods" | "thresholds">(
-    "sectors"
+/* ============ قسم إدخال البيانات (مع تبويبات الإدارة) ============ */
+function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
+  const isAdmin = me.role === "admin";
+  const [sub, setSub] = useState<"entry" | "indicators" | "targets" | "periods" | "thresholds">(
+    "entry"
   );
   return (
     <div>
-      <div className="tabs" style={{ marginBottom: 16 }}>
-        <button className={`tab ${sub === "sectors" ? "active" : ""}`} onClick={() => setSub("sectors")}>
-          القطاعات
-        </button>
-        <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
-          المؤشرات
-        </button>
-        <button className={`tab ${sub === "targets" ? "active" : ""}`} onClick={() => setSub("targets")}>
-          المستهدفات
-        </button>
-        <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
-          الأسابيع
-        </button>
-        <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
-          عتبات الحالة
-        </button>
-      </div>
-      {sub === "sectors" && <SectorsManager refData={refData} reload={reload} />}
-      {sub === "indicators" && <IndicatorsManager refData={refData} reload={reload} />}
-      {sub === "targets" && <TargetsManager refData={refData} reload={reload} />}
-      {sub === "periods" && <PeriodsManager refData={refData} reload={reload} />}
-      {sub === "thresholds" && <ThresholdsManager refData={refData} reload={reload} />}
+      {isAdmin && (
+        <div className="tabs" style={{ marginBottom: 16 }}>
+          <button className={`tab ${sub === "entry" ? "active" : ""}`} onClick={() => setSub("entry")}>
+            الإدخال
+          </button>
+          <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
+            المؤشرات
+          </button>
+          <button className={`tab ${sub === "targets" ? "active" : ""}`} onClick={() => setSub("targets")}>
+            المستهدفات
+          </button>
+          <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
+            الأسابيع
+          </button>
+          <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
+            عتبات الحالة
+          </button>
+        </div>
+      )}
+      {sub === "entry" && <DataEntry me={me} refData={refData} reload={reload} />}
+      {sub === "indicators" && isAdmin && <IndicatorsManager refData={refData} reload={reload} />}
+      {sub === "targets" && isAdmin && <TargetsManager refData={refData} reload={reload} />}
+      {sub === "periods" && isAdmin && <PeriodsManager refData={refData} reload={reload} />}
+      {sub === "thresholds" && isAdmin && <StatusBandsManager refData={refData} reload={reload} />}
     </div>
   );
 }
@@ -1346,58 +1388,116 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
   );
 }
 
-function ThresholdsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [good, setGood] = useState(String(refData.thresholds.good));
-  const [excellent, setExcellent] = useState(String(refData.thresholds.excellent));
+function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const [list, setList] = useState<Band[]>(() =>
+    (refData.statuses.length ? refData.statuses : DEFAULT_BANDS).map((b) => ({ ...b }))
+  );
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  function upd(i: number, patch: Partial<Band>) {
+    setList((s) => s.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  }
+  function add() {
+    const last = list[list.length - 1];
+    setList((s) => [...s, { label: "حالة جديدة", color: "#3b82f6", from: last ? last.from + 10 : 0 }]);
+  }
+  function remove(i: number) {
+    setList((s) => s.filter((_, idx) => idx !== i));
+  }
 
   async function save() {
     setMsg("");
     setErr("");
+    const statuses = list
+      .filter((b) => b.label.trim())
+      .map((b) => ({ label: b.label.trim(), color: b.color, from: Number(b.from) || 0 }));
+    if (statuses.length === 0) {
+      setErr("أضف حالة واحدة على الأقل");
+      return;
+    }
     const res = await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goodThreshold: Number(good), excellentThreshold: Number(excellent) }),
+      body: JSON.stringify({ statuses }),
     });
     const d = await res.json();
     if (!res.ok) setErr(d.error || "تعذّر الحفظ");
     else {
-      setMsg("تم حفظ العتبات ✓");
+      setMsg("تم حفظ الحالات ✓");
       reload();
     }
   }
 
+  const sorted = [...list].sort((a, b) => a.from - b.from);
+
   return (
     <div className="card">
-      <h2 className="section-title">عتبات حالة المؤشرات</h2>
+      <h2 className="section-title">حالات الأداء (الألوان والنِّسَب)</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        تتحكم في تلوين المؤشرات حسب نسبة الإنجاز. أي مؤشر تحت حد التعثر الجزئي يعتبر متعثرًا (أحمر).
+        لكل حالة: اسم ولون والنسبة التي تبدأ منها. تُلوّن المؤشرات حسب أعلى حالة تتجاوز نسبتُها نسبةَ الإنجاز.
       </p>
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
-      <div className="row">
-        <div>
-          <label>
-            <span className="dot" style={{ background: GAUGE.good, display: "inline-block", marginInlineEnd: 6 }} />
-            حد &quot;متعثر جزئيًا&quot; (أصفر) — النسبة من
-          </label>
-          <input type="number" step="any" value={good} onChange={(e) => setGood(e.target.value)} />
+
+      {list.map((b, i) => (
+        <div key={i} className="band-row">
+          <input
+            type="color"
+            className="band-color"
+            value={/^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : "#3b82f6"}
+            onChange={(e) => upd(i, { color: e.target.value })}
+            title="اللون"
+          />
+          <input
+            className="band-label"
+            placeholder="اسم الحالة"
+            value={b.label}
+            onChange={(e) => upd(i, { label: e.target.value })}
+          />
+          <div className="band-from">
+            <span className="muted">من %</span>
+            <input
+              type="number"
+              min="0"
+              value={String(b.from)}
+              onChange={(e) => upd(i, { from: Number(e.target.value) })}
+            />
+          </div>
+          <button className="btn btn-danger btn-sm" onClick={() => remove(i)}>
+            حذف
+          </button>
         </div>
-        <div>
-          <label>
-            <span className="dot" style={{ background: GAUGE.excellent, display: "inline-block", marginInlineEnd: 6 }} />
-            حد &quot;وفق المسار&quot; (أخضر) — النسبة من
-          </label>
-          <input type="number" step="any" value={excellent} onChange={(e) => setExcellent(e.target.value)} />
-        </div>
+      ))}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+        <button className="btn btn-ghost" onClick={add}>
+          + إضافة حالة
+        </button>
+        <button className="btn" onClick={save}>
+          حفظ الحالات
+        </button>
       </div>
-      <div style={{ marginTop: 8 }} className="muted">
-        مثال: متعثر &lt; {good || "؟"}% · متعثر جزئيًا {good || "؟"}–{excellent || "؟"}% · وفق المسار ≥ {excellent || "؟"}%
+
+      <div className="muted" style={{ marginTop: 14, fontSize: 12 }}>
+        معاينة:{" "}
+        {sorted.map((b, i) => (
+          <span
+            key={i}
+            style={{
+              background: tint(b.color),
+              color: b.color,
+              padding: "3px 10px",
+              borderRadius: 8,
+              fontWeight: 700,
+              marginInlineEnd: 6,
+              display: "inline-block",
+            }}
+          >
+            {b.label} ≥ {b.from}%
+          </span>
+        ))}
       </div>
-      <button className="btn" style={{ marginTop: 16 }} onClick={save}>
-        حفظ العتبات
-      </button>
     </div>
   );
 }

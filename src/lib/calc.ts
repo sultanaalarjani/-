@@ -1,28 +1,16 @@
-// حساب نسبة الإنجاز وحالة الأداء للمؤشر
+// حساب نسبة الإنجاز وحالات الأداء القابلة للتخصيص (bands)
 
-export type PerfStatus = "excellent" | "good" | "weak" | "none";
-
-export interface Thresholds {
-  good: number; // حد التعثر الجزئي (أصفر) — أقل منه يعتبر متعثرًا
-  excellent: number; // حد "وفق المسار" (أخضر)
-}
-
-export const DEFAULT_THRESHOLDS: Thresholds = { good: 80, excellent: 100 };
-
-export interface PerfResult {
-  achievement: number | null; // نسبة الإنجاز %
-  status: PerfStatus;
+export interface Band {
   label: string;
-  color: string; // لون الخلفية
-  text: string; // لون النص
+  color: string; // لون الحالة (hex)
+  from: number; // الحد الأدنى للنسبة المئوية
 }
 
-const STATUS_META: Record<PerfStatus, { label: string; color: string; text: string }> = {
-  excellent: { label: "وفق المسار", color: "#dcfce7", text: "#15803d" },
-  good: { label: "متعثر جزئيًا", color: "#fef9c3", text: "#a16207" },
-  weak: { label: "متعثر", color: "#fee2e2", text: "#b91c1c" },
-  none: { label: "—", color: "#f1f5f9", text: "#64748b" },
-};
+export const DEFAULT_BANDS: Band[] = [
+  { label: "متعثر", color: "#ef4444", from: 0 },
+  { label: "متعثر جزئيًا", color: "#f59e0b", from: 80 },
+  { label: "وفق المسار", color: "#22c55e", from: 100 },
+];
 
 // نسبة الإنجاز = المحقق / المستهدف × 100
 export function computeAchievement(
@@ -33,28 +21,46 @@ export function computeAchievement(
   return (actual / target) * 100;
 }
 
-export function perfStatus(
-  achievement: number | null,
-  t: Thresholds = DEFAULT_THRESHOLDS
-): PerfStatus {
-  if (achievement == null) return "none";
-  if (achievement >= t.excellent) return "excellent";
-  if (achievement >= t.good) return "good";
-  return "weak";
+// إرجاع الحالة (band) المطابقة لنسبة معيّنة
+export function bandOf(achievement: number | null, bands: Band[]): Band | null {
+  if (achievement == null) return null;
+  const list = (bands && bands.length ? bands : DEFAULT_BANDS)
+    .slice()
+    .sort((a, b) => a.from - b.from);
+  let match: Band | null = null;
+  for (const b of list) if (achievement >= b.from) match = b;
+  return match ?? list[0] ?? null;
 }
 
-export function statusMeta(status: PerfStatus) {
-  return STATUS_META[status];
+// تحويل لون hex إلى خلفية فاتحة (بإضافة شفافية)
+export function tint(hex: string, alpha = "22"): string {
+  let h = (hex || "#64748b").replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  return `#${h.slice(0, 6)}${alpha}`;
+}
+
+export interface EvalResult {
+  achievement: number | null;
+  band: Band | null;
+  label: string;
+  color: string; // لون النص/الحالة
+  bg: string; // خلفية فاتحة
 }
 
 export function evaluate(
   actual: number | null | undefined,
   target: number | null | undefined,
-  t: Thresholds = DEFAULT_THRESHOLDS
-): PerfResult {
+  bands: Band[]
+): EvalResult {
   const achievement = computeAchievement(actual, target);
-  const status = perfStatus(achievement, t);
-  return { achievement, status, ...STATUS_META[status] };
+  const band = bandOf(achievement, bands);
+  return {
+    achievement,
+    band,
+    label: band?.label ?? "—",
+    color: band?.color ?? "#64748b",
+    bg: band ? tint(band.color) : "rgba(255,255,255,0.05)",
+  };
 }
 
 export function fmtNum(v: number | null | undefined): string {

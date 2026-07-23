@@ -13,18 +13,10 @@ export async function PUT(req: Request) {
   if (!user || user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  const { goodThreshold, excellentThreshold } = await req.json().catch(() => ({}));
-  const g = Number(goodThreshold);
-  const e = Number(excellentThreshold);
-  if (!Number.isFinite(g) || !Number.isFinite(e) || g < 0 || e < 0) {
-    return NextResponse.json({ error: "قيم غير صحيحة" }, { status: 400 });
+  const { statuses } = await req.json().catch(() => ({}));
+  if (!Array.isArray(statuses) || statuses.length === 0) {
+    return NextResponse.json({ error: "أضف حالة واحدة على الأقل" }, { status: 400 });
   }
-  if (g >= e) {
-    return NextResponse.json(
-      { error: "حد التعثر الجزئي يجب أن يكون أقل من حد وفق المسار" },
-      { status: 400 }
-    );
-  }
-  const settings = await updateSettings({ goodThreshold: g, excellentThreshold: e });
+  const settings = await updateSettings({ statuses });
   return NextResponse.json({ ok: true, settings });
 }

@@ -73,10 +73,21 @@ export interface Measurement {
   updatedAt: string;
 }
 
-export interface Settings {
-  goodThreshold: number;
-  excellentThreshold: number;
+export interface StatusBand {
+  label: string;
+  color: string;
+  from: number;
 }
+
+export interface Settings {
+  statuses: StatusBand[];
+}
+
+const DEFAULT_STATUS_BANDS: StatusBand[] = [
+  { label: "متعثر", color: "#ef4444", from: 0 },
+  { label: "متعثر جزئيًا", color: "#f59e0b", from: 80 },
+  { label: "وفق المسار", color: "#22c55e", from: 100 },
+];
 
 interface DBShape {
   users: User[];
@@ -103,7 +114,7 @@ function defaultDB(): DBShape {
     indicators: [],
     periods: [],
     measurements: [],
-    settings: { goodThreshold: 80, excellentThreshold: 100 },
+    settings: { statuses: DEFAULT_STATUS_BANDS },
     targets: {},
   };
 }
@@ -592,23 +603,42 @@ export async function upsertMeasurement(input: {
   return m;
 }
 
-// ===== الإعدادات =====
+// ===== الإعدادات (حالات الأداء) =====
 export async function getSettings(): Promise<Settings> {
-  const s = (await getDB()).settings;
-  return {
-    goodThreshold: typeof s?.goodThreshold === "number" ? s.goodThreshold : 80,
-    excellentThreshold: typeof s?.excellentThreshold === "number" ? s.excellentThreshold : 100,
+  const s = (await getDB()).settings as unknown as {
+    statuses?: StatusBand[];
+    goodThreshold?: number;
+    excellentThreshold?: number;
   };
+  // توافق مع الإعداد القديم (goodThreshold/excellentThreshold)
+  if (s && Array.isArray(s.statuses) && s.statuses.length) {
+    return { statuses: s.statuses };
+  }
+  if (s && typeof s.goodThreshold === "number") {
+    return {
+      statuses: [
+        { label: "متعثر", color: "#ef4444", from: 0 },
+        { label: "متعثر جزئيًا", color: "#f59e0b", from: s.goodThreshold },
+        { label: "وفق المسار", color: "#22c55e", from: s.excellentThreshold ?? 100 },
+      ],
+    };
+  }
+  return { statuses: DEFAULT_STATUS_BANDS };
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
   const db = await getDB();
-  const cur = db.settings || { goodThreshold: 80, excellentThreshold: 100 };
-  if (typeof patch.goodThreshold === "number" && patch.goodThreshold >= 0)
-    cur.goodThreshold = patch.goodThreshold;
-  if (typeof patch.excellentThreshold === "number" && patch.excellentThreshold >= 0)
-    cur.excellentThreshold = patch.excellentThreshold;
-  db.settings = cur;
+  if (Array.isArray(patch.statuses)) {
+    const clean = patch.statuses
+      .filter((b) => b && typeof b.label === "string" && b.label.trim())
+      .map((b) => ({
+        label: String(b.label).trim(),
+        color: /^#[0-9a-fA-F]{3,8}$/.test(b.color) ? b.color : "#64748b",
+        from: Number.isFinite(Number(b.from)) ? Math.max(0, Number(b.from)) : 0,
+      }))
+      .sort((a, b) => a.from - b.from);
+    db.settings = { statuses: clean.length ? clean : DEFAULT_STATUS_BANDS };
+  }
   await save(db);
-  return cur;
+  return db.settings;
 }
