@@ -5,10 +5,23 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [lang, setLang] = useState<"ar" | "en">("ar");
+  const t = (ar: string, en: string) => (lang === "en" ? en : ar);
   useEffect(() => {
     const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
     if (saved) document.documentElement.setAttribute("data-theme", saved);
+    const sl = typeof window !== "undefined" ? localStorage.getItem("lang") : null;
+    if (sl === "en" || sl === "ar") setLang(sl);
   }, []);
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", lang);
+    document.documentElement.setAttribute("dir", lang === "en" ? "ltr" : "rtl");
+    try {
+      localStorage.setItem("lang", lang);
+    } catch {
+      /* ignore */
+    }
+  }, [lang]);
   const [step, setStep] = useState<"phone" | "code">("phone");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
@@ -33,9 +46,9 @@ export default function LoginPage() {
       } else {
         setStep("code");
         if (data.devCode) {
-          setInfo(`وضع التجربة: رمزك هو ${data.devCode}`);
+          setInfo(t(`وضع التجربة: رمزك هو ${data.devCode}`, `Demo mode: your code is ${data.devCode}`));
         } else {
-          setInfo("تم إرسال رمز الدخول برسالة إلى جوالك.");
+          setInfo(t("تم إرسال رمز الدخول برسالة إلى جوالك.", "A login code has been sent to your phone."));
         }
       }
     } catch {
@@ -72,9 +85,21 @@ export default function LoginPage() {
   return (
     <div className="auth-wrap">
       <div className="card auth-card">
-        <h1>لوحة إدارة عمليات الأداء</h1>
+        <div style={{ textAlign: lang === "en" ? "right" : "left", marginBottom: 4 }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setLang(lang === "ar" ? "en" : "ar")}
+          >
+            {lang === "ar" ? "English" : "عربي"}
+          </button>
+        </div>
+        <h1>{t("لوحة إدارة عمليات الأداء", "Performance Operations Dashboard")}</h1>
         <p className="sub">
-          سجّل الدخول برقم جوالك المصرّح به. سيصلك رمز مكوّن من 6 أرقام برسالة نصية.
+          {t(
+            "سجّل الدخول برقم جوالك المصرّح به. سيصلك رمز مكوّن من 6 أرقام برسالة نصية.",
+            "Sign in with your authorized phone number. A 6-digit code will be sent to you by SMS."
+          )}
         </p>
 
         {error && <div className="alert alert-error">{error}</div>}
@@ -83,7 +108,7 @@ export default function LoginPage() {
         {step === "phone" ? (
           <form onSubmit={requestCode}>
             <div className="field">
-              <label>رقم الجوال</label>
+              <label>{t("رقم الجوال", "Phone number")}</label>
               <input
                 type="tel"
                 inputMode="tel"
@@ -96,13 +121,13 @@ export default function LoginPage() {
               />
             </div>
             <button className="btn" style={{ width: "100%" }} disabled={loading}>
-              {loading ? "جارٍ الإرسال..." : "إرسال رمز الدخول"}
+              {loading ? t("جارٍ الإرسال...", "Sending...") : t("إرسال رمز الدخول", "Send login code")}
             </button>
           </form>
         ) : (
           <form onSubmit={verifyCode}>
             <div className="field">
-              <label>رمز الدخول</label>
+              <label>{t("رمز الدخول", "Login code")}</label>
               <input
                 inputMode="numeric"
                 maxLength={6}
@@ -115,7 +140,7 @@ export default function LoginPage() {
               />
             </div>
             <button className="btn" style={{ width: "100%" }} disabled={loading}>
-              {loading ? "جارٍ التحقق..." : "دخول"}
+              {loading ? t("جارٍ التحقق...", "Verifying...") : t("دخول", "Sign in")}
             </button>
             <button
               type="button"
@@ -128,7 +153,7 @@ export default function LoginPage() {
                 setInfo("");
               }}
             >
-              تغيير الرقم
+              {t("تغيير الرقم", "Change number")}
             </button>
           </form>
         )}

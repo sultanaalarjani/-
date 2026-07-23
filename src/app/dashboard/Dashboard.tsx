@@ -1,8 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { evaluate, fmtValue, fmtNum, bandOf, tint, Band, DEFAULT_BANDS } from "@/lib/calc";
+
+/* ============ اللغة (عربي / English) ============ */
+type Lang = "ar" | "en";
+const LangCtx = createContext<{ lang: Lang; t: (ar: string, en: string) => string }>({
+  lang: "ar",
+  t: (ar) => ar,
+});
+function useT() {
+  return useContext(LangCtx);
+}
 
 type Role = "admin" | "manager";
 type Unit = "percent" | "number";
@@ -121,10 +131,14 @@ export default function Dashboard({ me }: { me: Me }) {
   const [refData, setRefData] = useState<RefData>(EMPTY_REF);
   const [loaded, setLoaded] = useState(false);
   const [theme, setTheme] = useState("dark");
+  const [lang, setLang] = useState<Lang>("ar");
+  const t = useCallback((ar: string, en: string) => (lang === "en" ? en : ar), [lang]);
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? localStorage.getItem("theme") : null;
     if (saved) setTheme(saved);
+    const savedLang = typeof window !== "undefined" ? localStorage.getItem("lang") : null;
+    if (savedLang === "en" || savedLang === "ar") setLang(savedLang);
   }, []);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -134,6 +148,15 @@ export default function Dashboard({ me }: { me: Me }) {
       /* ignore */
     }
   }, [theme]);
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", lang);
+    document.documentElement.setAttribute("dir", lang === "en" ? "ltr" : "rtl");
+    try {
+      localStorage.setItem("lang", lang);
+    } catch {
+      /* ignore */
+    }
+  }, [lang]);
 
   const loadRef = useCallback(async () => {
     const [s, i, p, st, tg] = await Promise.all([
@@ -165,31 +188,38 @@ export default function Dashboard({ me }: { me: Me }) {
   }
 
   return (
-    <>
+    <LangCtx.Provider value={{ lang, t }}>
       <div className="topbar">
-        <div className="brand">إدارة عمليات الأداء</div>
+        <div className="brand">{t("إدارة عمليات الأداء", "Performance Operations")}</div>
         <div className="user">
           <span>
             {me.name}{" "}
             <span className={`badge ${isAdmin ? "badge-admin" : "badge-manager"}`}>
-              {isAdmin ? "مدير الإدارة" : "مدير قطاع"}
+              {isAdmin ? t("مدير الإدارة", "Admin") : t("مدير قطاع", "Sector Manager")}
             </span>
           </span>
+          <button
+            className="theme-select"
+            onClick={() => setLang(lang === "ar" ? "en" : "ar")}
+            title="Language / اللغة"
+          >
+            {lang === "ar" ? "EN" : "ع"}
+          </button>
           <select
             className="theme-select"
             value={theme}
             onChange={(e) => setTheme(e.target.value)}
-            title="الثيم / لون الخلفية"
-            aria-label="الثيم"
+            title={t("الثيم / لون الخلفية", "Theme")}
+            aria-label="theme"
           >
-            <option value="dark">🌙 داكن</option>
-            <option value="light">☀️ فاتح</option>
-            <option value="black">⚫ أسود</option>
-            <option value="slate">🌫️ رمادي</option>
-            <option value="royal">🔵 أزرق</option>
+            <option value="dark">🌙 {t("داكن", "Dark")}</option>
+            <option value="light">☀️ {t("فاتح", "Light")}</option>
+            <option value="black">⚫ {t("أسود", "Black")}</option>
+            <option value="slate">🌫️ {t("رمادي", "Slate")}</option>
+            <option value="royal">🔵 {t("أزرق", "Royal")}</option>
           </select>
           <button className="btn btn-ghost btn-sm" onClick={logout}>
-            خروج
+            {t("خروج", "Logout")}
           </button>
         </div>
       </div>
@@ -197,28 +227,28 @@ export default function Dashboard({ me }: { me: Me }) {
       <div className="container">
         <div className="tabs">
           <button className={`tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
-            النظرة العامة
+            {t("النظرة العامة", "Overview")}
           </button>
           <button className={`tab ${tab === "weekly" ? "active" : ""}`} onClick={() => setTab("weekly")}>
-            التحديث الأسبوعي
+            {t("التحديث الأسبوعي", "Weekly Update")}
           </button>
           <button className={`tab ${tab === "entry" ? "active" : ""}`} onClick={() => setTab("entry")}>
-            إدخال البيانات
+            {t("إدخال البيانات", "Data Entry")}
           </button>
           {isAdmin && (
             <>
               <button className={`tab ${tab === "structure" ? "active" : ""}`} onClick={() => setTab("structure")}>
-                الهيكل التنظيمي
+                {t("الهيكل التنظيمي", "Structure")}
               </button>
               <button className={`tab ${tab === "users" ? "active" : ""}`} onClick={() => setTab("users")}>
-                المدراء والصلاحيات
+                {t("المدراء والصلاحيات", "Users & Roles")}
               </button>
             </>
           )}
         </div>
 
         {!loaded ? (
-          <div className="empty">جارٍ التحميل...</div>
+          <div className="empty">{t("جارٍ التحميل...", "Loading...")}</div>
         ) : (
           <>
             {tab === "overview" && <Overview me={me} refData={refData} />}
@@ -229,7 +259,7 @@ export default function Dashboard({ me }: { me: Me }) {
           </>
         )}
       </div>
-    </>
+    </LangCtx.Provider>
   );
 }
 
@@ -313,12 +343,12 @@ function Gauge({
 }
 
 /* ============ النظرة العامة ============ */
-const SCOPES: { key: string; label: string; q: number | null }[] = [
-  { key: "year", label: "السنة كاملة", q: null },
-  { key: "q1", label: "الربع الأول", q: 1 },
-  { key: "q2", label: "الربع الثاني", q: 2 },
-  { key: "q3", label: "الربع الثالث", q: 3 },
-  { key: "q4", label: "الربع الرابع", q: 4 },
+const SCOPES: { key: string; label: string; en: string; q: number | null }[] = [
+  { key: "year", label: "السنة كاملة", en: "Full Year", q: null },
+  { key: "q1", label: "الربع الأول", en: "Q1", q: 1 },
+  { key: "q2", label: "الربع الثاني", en: "Q2", q: 2 },
+  { key: "q3", label: "الربع الثالث", en: "Q3", q: 3 },
+  { key: "q4", label: "الربع الرابع", en: "Q4", q: 4 },
 ];
 function periodQuarter(p: Period): number | null {
   if (!p.weekStart) return null;
@@ -327,6 +357,7 @@ function periodQuarter(p: Period): number | null {
 }
 
 function Overview({ me, refData }: { me: Me; refData: RefData }) {
+  const { t } = useT();
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const bands = refData.statuses;
@@ -453,32 +484,32 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     <div>
       <div className="toolbar">
         <div>
-          <label style={{ marginBottom: 4 }}>النطاق</label>
+          <label style={{ marginBottom: 4 }}>{t("النطاق", "Scope")}</label>
           <select value={scope} onChange={(e) => setScope(e.target.value)}>
             {SCOPES.map((s) => (
               <option key={s.key} value={s.key}>
-                {s.label}
+                {t(s.label, s.en)}
               </option>
             ))}
           </select>
         </div>
         <div style={{ flex: 1 }} />
         <button className="btn btn-ghost btn-sm" onClick={load}>
-          تحديث
+          {t("تحديث", "Refresh")}
         </button>
         <button className="btn btn-sm" onClick={exportCsv}>
-          ⬇ تصدير Excel
+          ⬇ {t("تصدير Excel", "Export Excel")}
         </button>
       </div>
 
       <div className="kpis">
         <div className="kpi">
           <div className="v" style={{ color: "#22d3ee" }}>{overall != null ? `${overall}%` : "—"}</div>
-          <div className="l">الإنجاز العام للمؤشرات</div>
+          <div className="l">{t("الإنجاز العام للمؤشرات", "Overall Achievement")}</div>
         </div>
         <div className="kpi">
           <div className="v">{indicators.length}</div>
-          <div className="l">عدد المؤشرات</div>
+          <div className="l">{t("عدد المؤشرات", "KPIs")}</div>
         </div>
         {bands.map((b) => (
           <div
@@ -494,17 +525,17 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
       </div>
       {statusFilter && (
         <div className="filter-note">
-          عرض حالة: <strong>{statusFilter}</strong> فقط
+          {t("عرض حالة:", "Showing status:")} <strong>{statusFilter}</strong> {t("فقط", "only")}
           <button className="btn btn-ghost btn-sm" style={{ marginInlineStart: 10 }} onClick={() => setStatusFilter(null)}>
-            إظهار الكل
+            {t("إظهار الكل", "Show all")}
           </button>
         </div>
       )}
 
       {loading ? (
-        <div className="empty">جارٍ التحميل...</div>
+        <div className="empty">{t("جارٍ التحميل...", "Loading...")}</div>
       ) : shownInd.length === 0 ? (
-        <div className="empty">لا توجد مؤشرات مطابقة.</div>
+        <div className="empty">{t("لا توجد مؤشرات مطابقة.", "No matching KPIs.")}</div>
       ) : (
         <div className="gauge-grid">
           {shownInd.map((ind) => (
@@ -542,7 +573,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
       )}
 
       <h2 className="section-title" style={{ marginTop: 28 }}>
-        تفاصيل القطاعات
+        {t("تفاصيل القطاعات", "Sector Details")}
       </h2>
       <div className="sector-list">
         {sectors.map((s) => {
@@ -594,12 +625,13 @@ function SectorDetail({
   bands: Band[];
   refData: RefData;
 }) {
+  const { t } = useT();
   return (
     <div className="sector-detail" style={{ overflowX: "auto" }}>
       <table className="detail-table">
         <thead>
           <tr>
-            <th className="ind-col">المؤشر</th>
+            <th className="ind-col">{t("المؤشر", "KPI")}</th>
             {periods.map((p) => (
               <th key={p.id} colSpan={3}>
                 {p.label}
@@ -618,7 +650,7 @@ function SectorDetail({
             <tr key={ind.id}>
               <td className="ind-col">
                 <strong>KPI {i + 1}</strong> · {ind.name}{" "}
-                <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
+                <span className="muted">({ind.unit === "percent" ? "%" : t("عدد", "num")})</span>
               </td>
               {periods.map((p) => {
                 const m = mMap.get(mkey(sector.id, ind.id, p.id));
@@ -644,11 +676,12 @@ function SectorDetail({
 }
 
 function SubHead() {
+  const { t } = useT();
   return (
     <>
-      <th className="mini">مستهدف</th>
-      <th className="mini">محقق</th>
-      <th className="mini">الإنجاز</th>
+      <th className="mini">{t("مستهدف", "Target")}</th>
+      <th className="mini">{t("محقق", "Actual")}</th>
+      <th className="mini">{t("الإنجاز", "%")}</th>
     </>
   );
 }
@@ -694,6 +727,7 @@ function IndicatorModal({
   refData: RefData;
   onClose: () => void;
 }) {
+  const { t } = useT();
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" style={{ maxWidth: 920 }} onClick={(e) => e.stopPropagation()}>
@@ -702,11 +736,12 @@ function IndicatorModal({
             <div className="muted" style={{ fontSize: 12 }}>KPI {indicator.num}</div>
             <h3 style={{ margin: "4px 0 0" }}>{indicator.name}</h3>
             <div className="muted" style={{ fontSize: 13 }}>
-              مقارنة التطور عبر الأرباع · {indicator.unit === "percent" ? "نسبة %" : "عدد"}
+              {t("مقارنة التطور عبر الفترات", "Progress across periods")} ·{" "}
+              {indicator.unit === "percent" ? t("نسبة %", "percent %") : t("عدد", "number")}
             </div>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>
-            إغلاق
+            {t("إغلاق", "Close")}
           </button>
         </div>
 
@@ -714,7 +749,7 @@ function IndicatorModal({
           <table className="detail-table">
             <thead>
               <tr>
-                <th className="ind-col">القطاع</th>
+                <th className="ind-col">{t("القطاع", "Sector")}</th>
                 {periods.map((p) => (
                   <th key={p.id} colSpan={3}>
                     {p.label}
@@ -773,15 +808,16 @@ function TargetActualCell({
   fg: string;
   strong?: boolean;
 }) {
+  const { t } = useT();
   return (
     <div className="ta-cell" style={{ background: bg, color: fg }}>
       <div className="ta-box">
-        <span className="ta-lbl">مستهدف</span>
+        <span className="ta-lbl">{t("مستهدف", "Target")}</span>
         <span className="ta-val">{target != null ? fmtNum(target) : "—"}</span>
       </div>
       <div className="ta-sep" />
       <div className="ta-box">
-        <span className="ta-lbl">منجز</span>
+        <span className="ta-lbl">{t("منجز", "Done")}</span>
         <span className={"ta-val" + (strong ? " strong" : "")}>{fmtNum(actual)}</span>
       </div>
       {week != null && week > 0 && (
@@ -794,6 +830,7 @@ function TargetActualCell({
 }
 
 function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
+  const { t, lang } = useT();
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const bands = refData.statuses;
@@ -880,7 +917,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   weekWins.sort((a, b) => b.week - a.week);
 
   const periodLabel = week.label;
-  const today = new Date().toLocaleDateString("ar-SA-u-nu-latn", {
+  const today = new Date().toLocaleDateString(lang === "en" ? "en-US" : "ar-SA-u-nu-latn", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -982,7 +1019,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* شريط العنوان للعرض الأسبوعي */}
       <div className="weekly-banner">
         <div>
-          <div className="weekly-title">التحديث الأسبوعي لحالة المؤشرات</div>
+          <div className="weekly-title">{t("التحديث الأسبوعي لحالة المؤشرات", "Weekly KPI Update")}</div>
           <div className="weekly-date">{today} · {periodLabel}</div>
         </div>
         <div className="weekly-actions">
@@ -998,8 +1035,8 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
               padding: "8px 10px",
             }}
           />
-          <button className="btn btn-sm btn-ghost" onClick={load}>تحديث</button>
-          <button className="btn btn-sm" onClick={printPDF}>🖨 حفظ PDF</button>
+          <button className="btn btn-sm btn-ghost" onClick={load}>{t("تحديث", "Refresh")}</button>
+          <button className="btn btn-sm" onClick={printPDF}>🖨 {t("حفظ PDF", "Save PDF")}</button>
           <button className="btn btn-sm" onClick={exportExcel}>⬇ Excel</button>
         </div>
       </div>
@@ -1008,13 +1045,17 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       <div className="kpis" style={{ marginTop: 14 }}>
         <div className="kpi">
           <div className="v" style={{ color: "#22d3ee" }}>{fmtNum(weekTotal)}</div>
-          <div className="l">جهات غُطّيت هذا الأسبوع</div>
+          <div className="l">{t("جهات غُطّيت هذا الأسبوع", "Covered this week")}</div>
         </div>
         <div className="kpi">
           <div className="v" style={{ color: "#a78bfa" }} dir="ltr">
             {fmtNum(cumTotal)} / {fmtNum(tgtTotal)}
           </div>
-          <div className="l">{quarterly ? "التراكمي / مستهدف الربع" : "التراكمي / المستهدف السنوي"}</div>
+          <div className="l">
+            {quarterly
+              ? t("التراكمي / مستهدف الربع", "Cumulative / Quarter target")
+              : t("التراكمي / المستهدف السنوي", "Cumulative / Annual target")}
+          </div>
         </div>
         {bands.map((b) => (
           <div className="kpi" key={b.label}>
@@ -1027,19 +1068,22 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* مصفوفة المؤشرات × القطاعات */}
       <div className="card" style={{ marginTop: 16, overflowX: "auto" }}>
         <h2 className="section-title">
-          المستهدف والمنجز لكل قطاع
+          {t("المستهدف والمنجز لكل قطاع", "Target & Done per Sector")}
           <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
-            (المنجَز: الإجمالي التراكمي حتى نهاية الأسبوع المحدَّد · القيمة +N: عدد الجهات المُغطّاة خلال الأسبوع)
+            {t(
+              "(المنجَز: الإجمالي التراكمي حتى نهاية الأسبوع المحدَّد · القيمة +N: عدد الجهات المُغطّاة خلال الأسبوع)",
+              "(Done: cumulative total up to the selected week · +N: entities covered during this week)"
+            )}
           </span>
         </h2>
         <table className="matrix">
           <thead>
             <tr>
-              <th style={{ textAlign: "right", minWidth: 220 }}>المؤشر</th>
+              <th style={{ textAlign: "right", minWidth: 220 }}>{t("المؤشر", "KPI")}</th>
               {sectors.map((s) => (
                 <th key={s.id}>{s.name}</th>
               ))}
-              <th>الإجمالي</th>
+              <th>{t("الإجمالي", "Total")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1081,10 +1125,10 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       {/* أبرز إنجازات هذا الأسبوع */}
       <div className="card" style={{ marginTop: 16 }}>
         <h2 className="section-title" style={{ color: "#22c55e" }}>
-          أبرز إنجازات هذا الأسبوع ({weekWins.length})
+          {t("أبرز إنجازات هذا الأسبوع", "This week's highlights")} ({weekWins.length})
         </h2>
         {weekWins.length === 0 ? (
-          <div className="muted">لم تُسجّل أي جهات مُغطّاة في هذا الأسبوع بعد.</div>
+          <div className="muted">{t("لم تُسجّل أي جهات مُغطّاة في هذا الأسبوع بعد.", "No entities covered this week yet.")}</div>
         ) : (
           <div className="weak-grid">
             {weekWins.slice(0, 12).map((w, i) => (
@@ -1100,7 +1144,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
                       <>
                         {" · "}
                         <span dir="ltr">
-                          التراكمي {fmtNum(w.cum)}/{fmtNum(w.target)}
+                          {t("التراكمي", "cum")} {fmtNum(w.cum)}/{fmtNum(w.target)}
                         </span>
                       </>
                     )}
@@ -1117,6 +1161,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
 
 /* ============ إدخال البيانات ============ */
 function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const bands = refData.statuses;
@@ -1200,19 +1245,28 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   }
 
   if (sectors.length === 0) {
-    return <div className="empty">لم تُسنَد إليك أي قطاعات حتى الآن. يُرجى التواصل مع مدير الإدارة لإسناد القطاعات.</div>;
+    return (
+      <div className="empty">
+        {t(
+          "لم تُسنَد إليك أي قطاعات حتى الآن. يُرجى التواصل مع مدير الإدارة لإسناد القطاعات.",
+          "No sectors have been assigned to you yet. Please contact the administrator."
+        )}
+      </div>
+    );
   }
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال المنجَز الأسبوعي</h2>
+      <h2 className="section-title">{t("إدخال المنجَز الأسبوعي", "Weekly Data Entry")}</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        يُرجى تحديد القطاع وتاريخ الأسبوع، ثم إدخال عدد الجهات <strong>المنجَزة</strong> خلال الأسبوع لكل
-        مؤشر. علمًا بأن المستهدف يُضبط من تبويب «المستهدفات» ويبقى ثابتًا.
+        {t(
+          "يُرجى تحديد القطاع وتاريخ الأسبوع، ثم إدخال عدد الجهات المنجَزة خلال الأسبوع لكل مؤشر. علمًا بأن المستهدف يُضبط من تبويب «المستهدفات» ويبقى ثابتًا.",
+          "Select the sector and week date, then enter the number of entities completed during the week for each KPI. The target is set in the Targets tab and remains fixed."
+        )}
       </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
-          <label>القطاع</label>
+          <label>{t("القطاع", "Sector")}</label>
           <select value={sectorId} onChange={(e) => setSectorId(e.target.value)}>
             {sectors.map((s) => (
               <option key={s.id} value={s.id}>
@@ -1222,11 +1276,13 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
           </select>
         </div>
         <div>
-          <label>اختر تاريخًا (يحدّد الأسبوع)</label>
+          <label>{t("اختر تاريخًا (يحدّد الأسبوع)", "Pick a date (sets the week)")}</label>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value || todayISO())} />
           <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
-            الأسبوع: <strong style={{ color: "var(--text)" }}>{week.label}</strong>
-            {!period && <span style={{ color: "#22c55e" }}> · (سيُنشأ هذا الأسبوع تلقائيًا عند الحفظ)</span>}
+            {t("الأسبوع:", "Week:")} <strong style={{ color: "var(--text)" }}>{week.label}</strong>
+            {!period && (
+              <span style={{ color: "#22c55e" }}> · {t("(سيُنشأ هذا الأسبوع تلقائيًا عند الحفظ)", "(this week is created on save)")}</span>
+            )}
           </div>
         </div>
       </div>
@@ -1247,18 +1303,18 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
               </div>
               <div className="ec-boxes">
                 <div className="ec-box">
-                  <label>المستهدف (ثابت)</label>
+                  <label>{t("المستهدف (ثابت)", "Target (fixed)")}</label>
                   <input
                     type="number"
                     value={tgt != null ? String(tgt) : ""}
                     placeholder="—"
                     disabled
-                    title="يُضبط من تبويب المستهدفات"
+                    title={t("يُضبط من تبويب المستهدفات", "Set from the Targets tab")}
                     readOnly
                   />
                 </div>
                 <div className="ec-box">
-                  <label>المنجز</label>
+                  <label>{t("المنجز", "Done")}</label>
                   <input
                     type="number"
                     min="0"
@@ -1271,7 +1327,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
               </div>
               <div className="ec-status">
                 <span className="badge" style={{ background: r.bg, color: r.color }}>
-                  {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : "لم يُعبّأ"}
+                  {r.achievement != null ? `${Math.round(r.achievement)}% · ${r.label}` : t("لم يُعبّأ", "Not filled")}
                 </span>
               </div>
             </div>
@@ -1280,7 +1336,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
       </div>
       <div style={{ marginTop: 18 }}>
         <button className="btn" onClick={save} disabled={loading}>
-          {loading ? "جارٍ الحفظ..." : "حفظ"}
+          {loading ? t("جارٍ الحفظ...", "Saving...") : t("حفظ", "Save")}
         </button>
       </div>
     </div>
@@ -1289,6 +1345,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
 
 /* ============ قسم إدخال البيانات (مع تبويبات الإدارة) ============ */
 function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const isAdmin = me.role === "admin";
   const [sub, setSub] = useState<"entry" | "indicators" | "targets" | "thresholds">("entry");
   return (
@@ -1296,16 +1353,16 @@ function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reloa
       {isAdmin && (
         <div className="tabs" style={{ marginBottom: 16 }}>
           <button className={`tab ${sub === "entry" ? "active" : ""}`} onClick={() => setSub("entry")}>
-            الإدخال
+            {t("الإدخال", "Entry")}
           </button>
           <button className={`tab ${sub === "indicators" ? "active" : ""}`} onClick={() => setSub("indicators")}>
-            المؤشرات
+            {t("المؤشرات", "KPIs")}
           </button>
           <button className={`tab ${sub === "targets" ? "active" : ""}`} onClick={() => setSub("targets")}>
-            المستهدفات
+            {t("المستهدفات", "Targets")}
           </button>
           <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
-            عتبات الحالة
+            {t("عتبات الحالة", "Status Bands")}
           </button>
         </div>
       )}
@@ -1320,6 +1377,7 @@ function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reloa
 /* ============ المستهدفات (سنوي / ربعي) ============ */
 const QUARTER_LABELS = ["Q1", "Q2", "Q3", "Q4"];
 function TargetsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const sectors = refData.sectors;
   const indicators = refData.indicators;
   const [mode, setMode] = useState<"annual" | "quarterly">(refData.targetMode);
@@ -1390,22 +1448,28 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
   }
 
   if (sectors.length === 0 || indicators.length === 0) {
-    return <div className="empty">يُرجى إضافة القطاعات والمؤشرات أولًا، ثم ضبط المستهدفات.</div>;
+    return (
+      <div className="empty">
+        {t("يُرجى إضافة القطاعات والمؤشرات أولًا، ثم ضبط المستهدفات.", "Please add sectors and KPIs first, then set targets.")}
+      </div>
+    );
   }
 
   return (
     <div className="card">
-      <h2 className="section-title">المستهدفات (عدد الجهات لكل قطاع × مؤشر)</h2>
+      <h2 className="section-title">{t("المستهدفات (عدد الجهات لكل قطاع × مؤشر)", "Targets (entities per sector × KPI)")}</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 12 }}>
-        يُرجى تحديد نوع المستهدف: <strong>سنوي</strong> (قيمة واحدة للسنة كاملة) أو <strong>ربعي</strong>{" "}
-        (قيمة مستقلة لكل ربع).
+        {t(
+          "يُرجى تحديد نوع المستهدف: سنوي (قيمة واحدة للسنة كاملة) أو ربعي (قيمة مستقلة لكل ربع).",
+          "Choose the target type: Annual (one value for the whole year) or Quarterly (a separate value per quarter)."
+        )}
       </p>
       <div className="mode-toggle" style={{ marginBottom: 14 }}>
         <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
-          سنوي
+          {t("سنوي", "Annual")}
         </button>
         <button className={mode === "quarterly" ? "on" : ""} onClick={() => setMode("quarterly")}>
-          ربعي
+          {t("ربعي", "Quarterly")}
         </button>
       </div>
       {err && <div className="alert alert-error">{err}</div>}
@@ -1416,7 +1480,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
           <table className="matrix">
             <thead>
               <tr>
-                <th style={{ textAlign: "right", minWidth: 200 }}>المؤشر</th>
+                <th style={{ textAlign: "right", minWidth: 200 }}>{t("المؤشر", "KPI")}</th>
                 {sectors.map((s) => (
                   <th key={s.id}>{s.name}</th>
                 ))}
@@ -1455,7 +1519,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
               <table className="matrix">
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "right", minWidth: 140 }}>القطاع</th>
+                    <th style={{ textAlign: "right", minWidth: 140 }}>{t("القطاع", "Sector")}</th>
                     {QUARTER_LABELS.map((q) => (
                       <th key={q}>{q}</th>
                     ))}
@@ -1487,7 +1551,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
 
       <div style={{ marginTop: 16 }}>
         <button className="btn" onClick={save} disabled={loading}>
-          {loading ? "جارٍ الحفظ..." : "حفظ المستهدفات"}
+          {loading ? t("جارٍ الحفظ...", "Saving...") : t("حفظ المستهدفات", "Save Targets")}
         </button>
       </div>
     </div>
@@ -1495,6 +1559,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
 }
 
 function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const [list, setList] = useState<Band[]>(() =>
     (refData.statuses.length ? refData.statuses : DEFAULT_BANDS).map((b) => ({ ...b }))
   );
@@ -1539,10 +1604,12 @@ function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () 
 
   return (
     <div className="card">
-      <h2 className="section-title">حالات الأداء (الألوان والنِّسَب)</h2>
+      <h2 className="section-title">{t("حالات الأداء (الألوان والنِّسَب)", "Performance Statuses (colors & thresholds)")}</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        تُحدَّد لكل حالة تسمية ولون ونسبة البداية. ويُصنَّف كل مؤشر ضمن أعلى حالة تكون نسبة بدايتها
-        مساويةً لنسبة الإنجاز المحقَّقة أو أقل منها.
+        {t(
+          "تُحدَّد لكل حالة تسمية ولون ونسبة البداية. ويُصنَّف كل مؤشر ضمن أعلى حالة تكون نسبة بدايتها مساويةً لنسبة الإنجاز المحقَّقة أو أقل منها.",
+          "Each status has a label, color, and starting percentage. Every KPI is classified under the highest status whose starting percentage is less than or equal to the achieved percentage."
+        )}
       </p>
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
@@ -1554,16 +1621,16 @@ function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () 
             className="band-color"
             value={/^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : "#3b82f6"}
             onChange={(e) => upd(i, { color: e.target.value })}
-            title="اللون"
+            title={t("اللون", "Color")}
           />
           <input
             className="band-label"
-            placeholder="اسم الحالة"
+            placeholder={t("اسم الحالة", "Status name")}
             value={b.label}
             onChange={(e) => upd(i, { label: e.target.value })}
           />
           <div className="band-from">
-            <span className="muted">من %</span>
+            <span className="muted">{t("من %", "from %")}</span>
             <input
               type="number"
               min="0"
@@ -1572,22 +1639,22 @@ function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () 
             />
           </div>
           <button className="btn btn-danger btn-sm" onClick={() => remove(i)}>
-            حذف
+            {t("حذف", "Delete")}
           </button>
         </div>
       ))}
 
       <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
         <button className="btn btn-ghost" onClick={add}>
-          + إضافة حالة
+          + {t("إضافة حالة", "Add status")}
         </button>
         <button className="btn" onClick={save}>
-          حفظ الحالات
+          {t("حفظ الحالات", "Save Statuses")}
         </button>
       </div>
 
       <div className="muted" style={{ marginTop: 14, fontSize: 12 }}>
-        معاينة:{" "}
+        {t("معاينة:", "Preview:")}{" "}
         {sorted.map((b, i) => (
           <span
             key={i}
@@ -1610,6 +1677,7 @@ function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () 
 }
 
 function SectorsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const [name, setName] = useState("");
   const [err, setErr] = useState("");
   async function add() {
@@ -1644,20 +1712,20 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
   }
   return (
     <div className="card">
-      <h2 className="section-title">القطاعات ({refData.sectors.length}/7)</h2>
+      <h2 className="section-title">{t("القطاعات", "Sectors")} ({refData.sectors.length}/7)</h2>
       {err && <div className="alert alert-error">{err}</div>}
       <div className="row" style={{ marginBottom: 16 }}>
-        <input placeholder="اسم القطاع" value={name} onChange={(e) => setName(e.target.value)} />
+        <input placeholder={t("اسم القطاع", "Sector name")} value={name} onChange={(e) => setName(e.target.value)} />
         <div style={{ flex: "0 0 auto" }}>
           <button className="btn" onClick={add} disabled={refData.sectors.length >= 7}>
-            إضافة قطاع
+            {t("إضافة قطاع", "Add sector")}
           </button>
         </div>
       </div>
       <table>
         <thead>
           <tr>
-            <th>القطاع</th>
+            <th>{t("القطاع", "Sector")}</th>
             <th></th>
           </tr>
         </thead>
@@ -1668,10 +1736,10 @@ function SectorsManager({ refData, reload }: { refData: RefData; reload: () => v
               <td>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => rename(s.id, s.name)}>
-                    تعديل
+                    {t("تعديل", "Edit")}
                   </button>
                   <button className="btn btn-danger btn-sm" onClick={() => remove(s.id)}>
-                    حذف
+                    {t("حذف", "Delete")}
                   </button>
                 </div>
               </td>
@@ -1690,6 +1758,7 @@ interface EditableInd {
   active: boolean;
 }
 function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
+  const { t } = useT();
   const [list, setList] = useState<EditableInd[]>(
     refData.indicators.map((i) => ({ id: i.id, name: i.name, unit: i.unit, active: i.active }))
   );
@@ -1718,9 +1787,12 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
   }
   return (
     <div className="card">
-      <h2 className="section-title">المؤشرات ({list.length})</h2>
+      <h2 className="section-title">{t("المؤشرات", "KPIs")} ({list.length})</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        يمكن إضافة المؤشرات أو تعديلها أو حذفها. تُختار &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للمؤشرات المئوية.
+        {t(
+          'يمكن إضافة المؤشرات أو تعديلها أو حذفها. تُختار "عدد" للمؤشرات الرقمية و"نسبة" للمؤشرات المئوية.',
+          'You can add, edit, or delete KPIs. Choose "number" for numeric KPIs and "percent" for percentage KPIs.'
+        )}
       </p>
       {msg && <div className="alert alert-success">{msg}</div>}
       {list.map((ind, i) => (
@@ -1728,30 +1800,30 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
           <span className="muted" style={{ flex: "0 0 46px" }}>
             KPI {i + 1}
           </span>
-          <input placeholder="اسم المؤشر" value={ind.name} onChange={(e) => upd(i, { name: e.target.value })} />
+          <input placeholder={t("اسم المؤشر", "KPI name")} value={ind.name} onChange={(e) => upd(i, { name: e.target.value })} />
           <select
             value={ind.unit}
             onChange={(e) => upd(i, { unit: e.target.value as Unit })}
             style={{ flex: "0 0 110px" }}
           >
-            <option value="percent">نسبة %</option>
-            <option value="number">عدد</option>
+            <option value="percent">{t("نسبة %", "percent %")}</option>
+            <option value="number">{t("عدد", "number")}</option>
           </select>
           <label className="checkbox-inline">
             <input type="checkbox" checked={ind.active} onChange={(e) => upd(i, { active: e.target.checked })} />
-            مُفعّل
+            {t("مُفعّل", "Active")}
           </label>
           <button className="btn btn-danger btn-sm" style={{ flex: "0 0 auto" }} onClick={() => removeInd(i)}>
-            حذف
+            {t("حذف", "Delete")}
           </button>
         </div>
       ))}
       <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
         <button className="btn btn-ghost" onClick={addInd}>
-          + إضافة مؤشر
+          + {t("إضافة مؤشر", "Add KPI")}
         </button>
         <button className="btn" onClick={save}>
-          حفظ المؤشرات
+          {t("حفظ المؤشرات", "Save KPIs")}
         </button>
       </div>
     </div>
@@ -1768,6 +1840,7 @@ interface UserRow {
   sectorIds: string[];
 }
 function UsersManager({ refData }: { refData: RefData }) {
+  const { t } = useT();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
@@ -1849,16 +1922,19 @@ function UsersManager({ refData }: { refData: RefData }) {
   return (
     <div>
       <div className="card" style={{ marginBottom: 24 }}>
-        <h2 className="section-title">إضافة مستخدم</h2>
+        <h2 className="section-title">{t("إضافة مستخدم", "Add User")}</h2>
         <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-          مدير القطاع = يدخل بيانات قطاعاته فقط. مدير الإدارة = صلاحيات كاملة على كل القطاعات.
+          {t(
+            "مدير القطاع = يدخل بيانات قطاعاته فقط. مدير الإدارة = صلاحيات كاملة على كل القطاعات.",
+            "Sector Manager = enters data for assigned sectors only. Admin = full access to all sectors."
+          )}
         </p>
         {err && <div className="alert alert-error">{err}</div>}
         {msg && <div className="alert alert-success">{msg}</div>}
         <form onSubmit={add}>
           <div className="row">
             <div>
-              <label>رقم الجوال</label>
+              <label>{t("رقم الجوال", "Phone number")}</label>
               <input
                 type="tel"
                 inputMode="tel"
@@ -1871,20 +1947,20 @@ function UsersManager({ refData }: { refData: RefData }) {
               />
             </div>
             <div>
-              <label>الاسم</label>
+              <label>{t("الاسم", "Name")}</label>
               <input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div style={{ flex: "0 0 170px" }}>
-              <label>الصلاحية</label>
+              <label>{t("الصلاحية", "Role")}</label>
               <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                <option value="manager">مدير قطاع</option>
-                <option value="admin">مدير الإدارة</option>
+                <option value="manager">{t("مدير قطاع", "Sector Manager")}</option>
+                <option value="admin">{t("مدير الإدارة", "Admin")}</option>
               </select>
             </div>
           </div>
           {role === "manager" && (
             <div className="field" style={{ marginTop: 12 }}>
-              <label>القطاعات المسؤول عنها</label>
+              <label>{t("القطاعات المسؤول عنها", "Assigned sectors")}</label>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 {refData.sectors.map((s) => (
                   <label key={s.id} className="checkbox-inline">
@@ -1896,20 +1972,20 @@ function UsersManager({ refData }: { refData: RefData }) {
             </div>
           )}
           <button className="btn" style={{ marginTop: 12 }}>
-            إضافة
+            {t("إضافة", "Add")}
           </button>
         </form>
       </div>
 
-      <h2 className="section-title">المستخدمون ({users.length})</h2>
+      <h2 className="section-title">{t("المستخدمون", "Users")} ({users.length})</h2>
       <table>
         <thead>
           <tr>
-            <th>الاسم</th>
-            <th>رقم الجوال</th>
-            <th>الصلاحية</th>
-            <th>القطاعات</th>
-            <th>الحالة</th>
+            <th>{t("الاسم", "Name")}</th>
+            <th>{t("رقم الجوال", "Phone")}</th>
+            <th>{t("الصلاحية", "Role")}</th>
+            <th>{t("القطاعات", "Sectors")}</th>
+            <th>{t("الحالة", "Status")}</th>
             <th></th>
           </tr>
         </thead>
@@ -1922,29 +1998,29 @@ function UsersManager({ refData }: { refData: RefData }) {
               </td>
               <td>
                 <span className={`badge ${u.role === "admin" ? "badge-admin" : "badge-manager"}`}>
-                  {u.role === "admin" ? "مدير الإدارة" : "مدير قطاع"}
+                  {u.role === "admin" ? t("مدير الإدارة", "Admin") : t("مدير قطاع", "Sector Manager")}
                 </span>
               </td>
-              <td>{u.role === "manager" ? sectorNames(u.sectorIds) : "الكل"}</td>
+              <td>{u.role === "manager" ? sectorNames(u.sectorIds) : t("الكل", "All")}</td>
               <td>
                 {u.active ? (
-                  <span className="badge badge-manager">نشط</span>
+                  <span className="badge badge-manager">{t("نشط", "Active")}</span>
                 ) : (
-                  <span className="badge badge-off">موقوف</span>
+                  <span className="badge badge-off">{t("موقوف", "Disabled")}</span>
                 )}
               </td>
               <td>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {u.role === "manager" && (
                     <button className="btn btn-ghost btn-sm" onClick={() => editSectors(u)}>
-                      القطاعات
+                      {t("القطاعات", "Sectors")}
                     </button>
                   )}
                   <button className="btn btn-ghost btn-sm" onClick={() => patch(u.id, { active: !u.active })}>
-                    {u.active ? "إيقاف" : "تفعيل"}
+                    {u.active ? t("إيقاف", "Disable") : t("تفعيل", "Enable")}
                   </button>
                   <button className="btn btn-danger btn-sm" onClick={() => remove(u)}>
-                    حذف
+                    {t("حذف", "Delete")}
                   </button>
                 </div>
               </td>
