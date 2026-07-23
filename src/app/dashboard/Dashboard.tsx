@@ -1067,16 +1067,17 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   const sectors = visibleSectors(me, refData);
   const indicators = activeIndicators(refData);
   const bands = refData.statuses;
-  const isAdmin = me.role === "admin";
   const [sectorId, setSectorId] = useState(sectors[0]?.id || "");
   const [date, setDate] = useState(todayISO());
   const week = weekOf(date);
   const period = refData.periods.find((p) => p.weekStart === week.weekStart);
   const periodId = period?.id || "";
-  const [vals, setVals] = useState<Record<string, { target: string; actual: string }>>({});
+  const [vals, setVals] = useState<Record<string, string>>({}); // المنجز فقط
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const targetOf = (indId: string): number | null => refData.targets[tkey(sectorId, indId)] ?? null;
 
   const loadVals = useCallback(async () => {
     if (!sectorId || !periodId) {
@@ -1084,25 +1085,19 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
       return;
     }
     const d = await fetch(`/api/measurements?sectorId=${sectorId}&periodId=${periodId}`).then((r) => r.json());
-    const actualMap: Record<string, string> = {};
+    const map: Record<string, string> = {};
     for (const m of (d.measurements || []) as Measurement[]) {
-      actualMap[m.indicatorId] = m.actual != null ? String(m.actual) : "";
-    }
-    const map: Record<string, { target: string; actual: string }> = {};
-    for (const ind of indicators) {
-      const t = refData.targets[tkey(sectorId, ind.id)];
-      map[ind.id] = { target: t != null ? String(t) : "", actual: actualMap[ind.id] ?? "" };
+      map[m.indicatorId] = m.actual != null ? String(m.actual) : "";
     }
     setVals(map);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectorId, periodId, refData.targets]);
+  }, [sectorId, periodId]);
 
   useEffect(() => {
     loadVals();
   }, [loadVals]);
 
-  function setVal(indId: string, key: "target" | "actual", v: string) {
-    setVals((s) => ({ ...s, [indId]: { ...(s[indId] || { target: "", actual: "" }), [key]: v } }));
+  function setVal(indId: string, v: string) {
+    setVals((s) => ({ ...s, [indId]: v }));
   }
 
   async function ensurePeriodId(): Promise<string> {
@@ -1122,33 +1117,15 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
     setMsg("");
     setLoading(true);
     try {
-      // 1) تأكيد وجود الأسبوع (يُنشأ تلقائيًا من التاريخ إن لم يكن موجودًا)
+      // تأكيد وجود الأسبوع (يُنشأ تلقائيًا من التاريخ إن لم يكن موجودًا)
       const pid = await ensurePeriodId();
-      // 2) المستهدفات (سنوية) — دمج مع باقي القطاعات حتى لا تُمحى
-      if (isAdmin) {
-        const merged: Record<string, number> = { ...refData.targets };
-        for (const ind of indicators) {
-          const tv = vals[ind.id]?.target ?? "";
-          const key = tkey(sectorId, ind.id);
-          if (tv === "") delete merged[key];
-          else {
-            const n = Number(tv);
-            if (Number.isFinite(n) && n >= 0) merged[key] = n;
-          }
-        }
-        await fetch("/api/targets", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ targets: merged }),
-        });
-      }
-      // 3) المنجز لهذا الأسبوع
+      // المنجز لهذا الأسبوع فقط (المستهدف ثابت من شاشة المستهدفات)
       const items = indicators.map((ind) => ({
         sectorId,
         indicatorId: ind.id,
         periodId: pid,
-        target: vals[ind.id]?.target ?? "",
-        actual: vals[ind.id]?.actual ?? "",
+        target: targetOf(ind.id) ?? "",
+        actual: vals[ind.id] ?? "",
       }));
       const res = await fetch("/api/measurements", {
         method: "PUT",
@@ -1174,9 +1151,10 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال المستهدف والمنجز</h2>
+      <h2 className="section-title">إدخال المنجز الأسبوعي</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        اختر القطاع وتاريخ الأسبوع من التقويم، ثم عبّئ المستهدف السنوي والمنجز لهذا الأسبوع (عدد الجهات).
+        اختر القطاع وتاريخ الأسبوع، ثم عبّئ <strong>المنجز</strong> لهذا الأسبوع (عدد الجهات). المستهدف
+        ثابت للسنة ويُضبط من تبويب «المستهدفات».
       </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
@@ -1204,9 +1182,9 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
 
       <div className="entry-cards">
         {indicators.map((ind, i) => {
-          const tv = vals[ind.id]?.target ?? "";
-          const av = vals[ind.id]?.actual ?? "";
-          const r = evaluate(av === "" ? null : Number(av), tv === "" ? null : Number(tv), bands);
+          const tgt = targetOf(ind.id);
+          const av = vals[ind.id] ?? "";
+          const r = evaluate(av === "" ? null : Number(av), tgt, bands);
           return (
             <div className="entry-card" key={ind.id}>
               <div className="ec-title">
@@ -1215,16 +1193,14 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
               </div>
               <div className="ec-boxes">
                 <div className="ec-box">
-                  <label>المستهدف</label>
+                  <label>المستهدف (ثابت)</label>
                   <input
                     type="number"
-                    min="0"
-                    step="1"
+                    value={tgt != null ? String(tgt) : ""}
                     placeholder="—"
-                    value={tv}
-                    disabled={!isAdmin}
-                    title={isAdmin ? "" : "يُضبط من قِبل مدير الإدارة"}
-                    onChange={(e) => setVal(ind.id, "target", e.target.value)}
+                    disabled
+                    title="يُضبط من تبويب المستهدفات"
+                    readOnly
                   />
                 </div>
                 <div className="ec-box">
@@ -1235,7 +1211,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
                     step="1"
                     placeholder="—"
                     value={av}
-                    onChange={(e) => setVal(ind.id, "actual", e.target.value)}
+                    onChange={(e) => setVal(ind.id, e.target.value)}
                   />
                 </div>
               </div>
