@@ -515,7 +515,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
               onClick={() => setOpenIndicator(ind)}
             >
               <div className="gauge-head">
-                <span className="gauge-num">المؤشر {ind.num}</span>
+                <span className="gauge-num">KPI {ind.num}</span>
               </div>
               <div className="gauge-name" title={ind.name}>
                 {ind.name}
@@ -617,7 +617,7 @@ function SectorDetail({
           {indicators.map((ind, i) => (
             <tr key={ind.id}>
               <td className="ind-col">
-                <strong>م{i + 1}.</strong> {ind.name}{" "}
+                <strong>KPI {i + 1}</strong> · {ind.name}{" "}
                 <span className="muted">({ind.unit === "percent" ? "%" : "عدد"})</span>
               </td>
               {periods.map((p) => {
@@ -699,7 +699,7 @@ function IndicatorModal({
       <div className="modal" style={{ maxWidth: 920 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
           <div>
-            <div className="muted" style={{ fontSize: 12 }}>المؤشر {indicator.num}</div>
+            <div className="muted" style={{ fontSize: 12 }}>KPI {indicator.num}</div>
             <h3 style={{ margin: "4px 0 0" }}>{indicator.name}</h3>
             <div className="muted" style={{ fontSize: 13 }}>
               مقارنة التطور عبر الأرباع · {indicator.unit === "percent" ? "نسبة %" : "عدد"}
@@ -1029,7 +1029,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
         <h2 className="section-title">
           المستهدف والمنجز لكل قطاع
           <span className="muted" style={{ fontSize: 12, fontWeight: 400, marginRight: 8 }}>
-            (المنجز = التراكمي حتى هذا الأسبوع · +N = المُغطّى هذا الأسبوع)
+            (المنجَز: الإجمالي التراكمي حتى نهاية الأسبوع المحدَّد · القيمة +N: عدد الجهات المُغطّاة خلال الأسبوع)
           </span>
         </h2>
         <table className="matrix">
@@ -1046,7 +1046,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
             {indRows.map((r) => (
               <tr key={r.ind.id}>
                 <td style={{ textAlign: "right" }}>
-                  <span className="muted">م{r.num}.</span> {r.ind.name}
+                  <span className="muted">KPI {r.num}</span> · {r.ind.name}
                 </td>
                 {r.perSector.map((ps) => {
                   const c = cellOf(ps.band);
@@ -1200,15 +1200,15 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   }
 
   if (sectors.length === 0) {
-    return <div className="empty">لم تُسند لك أي قطاعات بعد. تواصل مع مدير الإدارة لإسناد قطاع لك.</div>;
+    return <div className="empty">لم تُسنَد إليك أي قطاعات حتى الآن. يُرجى التواصل مع مدير الإدارة لإسناد القطاعات.</div>;
   }
 
   return (
     <div className="card">
-      <h2 className="section-title">إدخال المنجز الأسبوعي</h2>
+      <h2 className="section-title">إدخال المنجَز الأسبوعي</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        اختر القطاع وتاريخ الأسبوع، ثم عبّئ <strong>المنجز</strong> لهذا الأسبوع (عدد الجهات). المستهدف
-        ثابت للسنة ويُضبط من تبويب «المستهدفات».
+        يُرجى تحديد القطاع وتاريخ الأسبوع، ثم إدخال عدد الجهات <strong>المنجَزة</strong> خلال الأسبوع لكل
+        مؤشر. علمًا بأن المستهدف يُضبط من تبويب «المستهدفات» ويبقى ثابتًا.
       </p>
       <div className="row" style={{ marginBottom: 18 }}>
         <div>
@@ -1226,7 +1226,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
           <input type="date" value={date} onChange={(e) => setDate(e.target.value || todayISO())} />
           <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
             الأسبوع: <strong style={{ color: "var(--text)" }}>{week.label}</strong>
-            {!period && <span style={{ color: "#22c55e" }}> · (أسبوع جديد يُنشأ عند الحفظ)</span>}
+            {!period && <span style={{ color: "#22c55e" }}> · (سيُنشأ هذا الأسبوع تلقائيًا عند الحفظ)</span>}
           </div>
         </div>
       </div>
@@ -1242,7 +1242,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
           return (
             <div className="entry-card" key={ind.id}>
               <div className="ec-title">
-                <span className="ec-num">م{i + 1}</span>
+                <span className="ec-num">KPI {i + 1}</span>
                 {ind.name}
               </div>
               <div className="ec-boxes">
@@ -1290,9 +1290,7 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
 /* ============ قسم إدخال البيانات (مع تبويبات الإدارة) ============ */
 function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reload: () => void }) {
   const isAdmin = me.role === "admin";
-  const [sub, setSub] = useState<"entry" | "indicators" | "targets" | "periods" | "thresholds">(
-    "entry"
-  );
+  const [sub, setSub] = useState<"entry" | "indicators" | "targets" | "thresholds">("entry");
   return (
     <div>
       {isAdmin && (
@@ -1306,9 +1304,6 @@ function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reloa
           <button className={`tab ${sub === "targets" ? "active" : ""}`} onClick={() => setSub("targets")}>
             المستهدفات
           </button>
-          <button className={`tab ${sub === "periods" ? "active" : ""}`} onClick={() => setSub("periods")}>
-            الأسابيع
-          </button>
           <button className={`tab ${sub === "thresholds" ? "active" : ""}`} onClick={() => setSub("thresholds")}>
             عتبات الحالة
           </button>
@@ -1317,14 +1312,13 @@ function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reloa
       {sub === "entry" && <DataEntry me={me} refData={refData} reload={reload} />}
       {sub === "indicators" && isAdmin && <IndicatorsManager refData={refData} reload={reload} />}
       {sub === "targets" && isAdmin && <TargetsManager refData={refData} reload={reload} />}
-      {sub === "periods" && isAdmin && <PeriodsManager refData={refData} reload={reload} />}
       {sub === "thresholds" && isAdmin && <StatusBandsManager refData={refData} reload={reload} />}
     </div>
   );
 }
 
 /* ============ المستهدفات (سنوي / ربعي) ============ */
-const QUARTER_LABELS = ["ر1", "ر2", "ر3", "ر4"];
+const QUARTER_LABELS = ["Q1", "Q2", "Q3", "Q4"];
 function TargetsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
   const sectors = refData.sectors;
   const indicators = refData.indicators;
@@ -1396,14 +1390,15 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
   }
 
   if (sectors.length === 0 || indicators.length === 0) {
-    return <div className="empty">أضِف القطاعات والمؤشرات أولًا ثم اضبط المستهدفات.</div>;
+    return <div className="empty">يُرجى إضافة القطاعات والمؤشرات أولًا، ثم ضبط المستهدفات.</div>;
   }
 
   return (
     <div className="card">
       <h2 className="section-title">المستهدفات (عدد الجهات لكل قطاع × مؤشر)</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 12 }}>
-        اختر نوع المستهدف: <strong>سنوي</strong> (رقم واحد للسنة) أو <strong>ربعي</strong> (رقم لكل ربع).
+        يُرجى تحديد نوع المستهدف: <strong>سنوي</strong> (قيمة واحدة للسنة كاملة) أو <strong>ربعي</strong>{" "}
+        (قيمة مستقلة لكل ربع).
       </p>
       <div className="mode-toggle" style={{ marginBottom: 14 }}>
         <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
@@ -1431,7 +1426,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
               {indicators.map((ind, i) => (
                 <tr key={ind.id}>
                   <td style={{ textAlign: "right" }}>
-                    <span className="muted">م{i + 1}.</span> {ind.name}
+                    <span className="muted">KPI {i + 1}</span> · {ind.name}
                   </td>
                   {sectors.map((s) => (
                     <td key={s.id}>
@@ -1454,7 +1449,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
           {indicators.map((ind, i) => (
             <div className="card" key={ind.id} style={{ overflowX: "auto", marginBottom: 12 }}>
               <div className="ec-title" style={{ minHeight: "auto", marginBottom: 8 }}>
-                <span className="ec-num">م{i + 1}</span>
+                <span className="ec-num">KPI {i + 1}</span>
                 {ind.name}
               </div>
               <table className="matrix">
@@ -1546,7 +1541,8 @@ function StatusBandsManager({ refData, reload }: { refData: RefData; reload: () 
     <div className="card">
       <h2 className="section-title">حالات الأداء (الألوان والنِّسَب)</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        لكل حالة: اسم ولون والنسبة التي تبدأ منها. تُلوّن المؤشرات حسب أعلى حالة تتجاوز نسبتُها نسبةَ الإنجاز.
+        تُحدَّد لكل حالة تسمية ولون ونسبة البداية. ويُصنَّف كل مؤشر ضمن أعلى حالة تكون نسبة بدايتها
+        مساويةً لنسبة الإنجاز المحقَّقة أو أقل منها.
       </p>
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
@@ -1724,13 +1720,13 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
     <div className="card">
       <h2 className="section-title">المؤشرات ({list.length})</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 16 }}>
-        أضف أو احذف أو عدّل المؤشرات. اختر &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للنسب المئوية.
+        يمكن إضافة المؤشرات أو تعديلها أو حذفها. تُختار &quot;عدد&quot; للمؤشرات الرقمية و&quot;نسبة&quot; للمؤشرات المئوية.
       </p>
       {msg && <div className="alert alert-success">{msg}</div>}
       {list.map((ind, i) => (
         <div key={i} className="field-row">
-          <span className="muted" style={{ flex: "0 0 30px" }}>
-            م{i + 1}
+          <span className="muted" style={{ flex: "0 0 46px" }}>
+            KPI {i + 1}
           </span>
           <input placeholder="اسم المؤشر" value={ind.name} onChange={(e) => upd(i, { name: e.target.value })} />
           <select
@@ -1758,77 +1754,6 @@ function IndicatorsManager({ refData, reload }: { refData: RefData; reload: () =
           حفظ المؤشرات
         </button>
       </div>
-    </div>
-  );
-}
-
-function PeriodsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
-  const [label, setLabel] = useState("");
-  async function add() {
-    if (!label.trim()) return;
-    await fetch("/api/periods", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
-    });
-    setLabel("");
-    reload();
-  }
-  async function rename(id: string, current: string) {
-    const v = prompt("اسم الأسبوع الجديد:", current);
-    if (v && v.trim()) {
-      await fetch(`/api/periods/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: v }),
-      });
-      reload();
-    }
-  }
-  async function remove(id: string) {
-    if (!confirm("حذف الأسبوع سيحذف بياناته. متابعة؟")) return;
-    await fetch(`/api/periods/${id}`, { method: "DELETE" });
-    reload();
-  }
-  return (
-    <div className="card">
-      <h2 className="section-title">الأسابيع ({refData.periods.length})</h2>
-      <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        أضِف أسبوعًا جديدًا كل مرة تبين ترصدين فيها التحديث. المستهدفات تُنسخ تلقائيًا للأسبوع الجديد.
-      </p>
-      <div className="row" style={{ marginBottom: 16 }}>
-        <input placeholder="مثال: أسبوع 1 · 5 يناير 2026" value={label} onChange={(e) => setLabel(e.target.value)} />
-        <div style={{ flex: "0 0 auto" }}>
-          <button className="btn" onClick={add}>
-            إضافة أسبوع
-          </button>
-        </div>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>الأسبوع</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {refData.periods.map((p) => (
-            <tr key={p.id}>
-              <td>{p.label}</td>
-              <td>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => rename(p.id, p.label)}>
-                    تعديل
-                  </button>
-                  <button className="btn btn-danger btn-sm" onClick={() => remove(p.id)}>
-                    حذف
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
