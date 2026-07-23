@@ -70,7 +70,8 @@ interface RefData {
   indicators: Indicator[];
   periods: Period[];
   statuses: Band[]; // حالات الأداء القابلة للتخصيص
-  targets: Record<string, number>; // المستهدفات السنوية لكل (قطاع|مؤشر)
+  targets: Record<string, number | number[]>; // سنوي: رقم · ربعي: [ر1..ر4]
+  targetMode: "annual" | "quarterly";
 }
 
 const EMPTY_REF: RefData = {
@@ -79,10 +80,36 @@ const EMPTY_REF: RefData = {
   periods: [],
   statuses: DEFAULT_BANDS,
   targets: {},
+  targetMode: "annual",
 };
 
 function tkey(sectorId: string, indicatorId: string) {
   return `${sectorId}|${indicatorId}`;
+}
+// المستهدف السنوي (مجموع الأرباع في الوضع الربعي)
+function tgtAnnual(refData: RefData, key: string): number | null {
+  const t = refData.targets[key];
+  if (t == null) return null;
+  return Array.isArray(t) ? t.reduce((a, b) => a + (Number(b) || 0), 0) : Number(t);
+}
+// مستهدف ربع معيّن (1..4)
+function tgtQuarter(refData: RefData, key: string, q: number): number | null {
+  const t = refData.targets[key];
+  if (t == null) return null;
+  if (Array.isArray(t)) {
+    const v = Number(t[q - 1]);
+    return Number.isFinite(v) ? v : 0;
+  }
+  return Number(t);
+}
+// المستهدف المطبّق حسب الوضع (ربعي → مستهدف الربع · سنوي → السنوي)
+function tgtEff(refData: RefData, key: string, q: number): number | null {
+  return refData.targetMode === "quarterly" ? tgtQuarter(refData, key, q) : tgtAnnual(refData, key);
+}
+// ربع تاريخ (1..4) من نص YYYY-MM-DD
+function quarterOfDate(dateStr: string): number {
+  const m = Number(dateStr.slice(5, 7)) - 1;
+  return Number.isFinite(m) ? Math.floor(m / 3) + 1 : 1;
 }
 
 const GAUGE_TRACK = "rgba(255,255,255,0.08)";
@@ -121,6 +148,7 @@ export default function Dashboard({ me }: { me: Me }) {
       indicators: i.indicators || [],
       periods: p.periods || [],
       statuses: st.settings?.statuses?.length ? st.settings.statuses : DEFAULT_BANDS,
+      targetMode: st.settings?.targetMode === "quarterly" ? "quarterly" : "annual",
       targets: tg.targets || {},
     });
     setLoaded(true);
@@ -336,10 +364,12 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
     return refData.periods.filter((p) => periodQuarter(p) === q);
   }, [scope, refData.periods]);
 
-  // نسبة إنجاز (قطاع×مؤشر) = مجموع المنجز في النطاق ÷ المستهدف السنوي
+  const scopeQ = SCOPES.find((x) => x.key === scope)?.q ?? null;
+  // نسبة إنجاز (قطاع×مؤشر) = مجموع المنجز في النطاق ÷ المستهدف المطبّق
   const achOf = useCallback(
     (sectorId: string, indId: string): number | null => {
-      const target = refData.targets[tkey(sectorId, indId)] ?? null;
+      const key = tkey(sectorId, indId);
+      const target = scopeQ == null ? tgtAnnual(refData, key) : tgtEff(refData, key, scopeQ);
       if (!target || target <= 0) return null;
       let sum = 0;
       let has = false;
@@ -352,7 +382,8 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
       }
       return has ? (sum / target) * 100 : null;
     },
-    [mMap, scopeWeeks, refData.targets]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mMap, scopeWeeks, refData.targets, refData.targetMode, scopeQ]
   );
 
   const indData = useMemo(
@@ -394,13 +425,14 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
       for (const ind of indicators)
         for (const p of scopeWeeks) {
           const m = mMap.get(mkey(s.id, ind.id, p.id));
-          const rr = evaluate(m?.actual, m?.target, bands);
+          const tgt = tgtEff(refData, tkey(s.id, ind.id), periodQuarter(p) ?? 1);
+          const rr = evaluate(m?.actual, tgt, bands);
           rows.push([
             s.name,
             ind.name,
             ind.unit === "percent" ? "نسبة" : "عدد",
             p.label,
-            m?.target != null ? String(m.target) : "",
+            tgt != null ? String(tgt) : "",
             m?.actual != null ? String(m.actual) : "",
             rr.achievement != null ? String(Math.round(rr.achievement)) : "",
           ]);
@@ -504,6 +536,7 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
           periods={scopeWeeks}
           mMap={mMap}
           bands={bands}
+          refData={refData}
           onClose={() => setOpenIndicator(null)}
         />
       )}
@@ -529,7 +562,14 @@ function Overview({ me, refData }: { me: Me; refData: RefData }) {
                 </span>
               </button>
               {isOpen && (
-                <SectorDetail sector={s} indicators={indicators} periods={scopeWeeks} mMap={mMap} bands={bands} />
+                <SectorDetail
+                  sector={s}
+                  indicators={indicators}
+                  periods={scopeWeeks}
+                  mMap={mMap}
+                  bands={bands}
+                  refData={refData}
+                />
               )}
             </div>
           );
@@ -545,12 +585,14 @@ function SectorDetail({
   periods,
   mMap,
   bands,
+  refData,
 }: {
   sector: Sector;
   indicators: Indicator[];
   periods: Period[];
   mMap: Map<string, Measurement>;
   bands: Band[];
+  refData: RefData;
 }) {
   return (
     <div className="sector-detail" style={{ overflowX: "auto" }}>
@@ -580,11 +622,12 @@ function SectorDetail({
               </td>
               {periods.map((p) => {
                 const m = mMap.get(mkey(sector.id, ind.id, p.id));
-                const r = evaluate(m?.actual, m?.target, bands);
+                const tgt = tgtEff(refData, tkey(sector.id, ind.id), periodQuarter(p) ?? 1);
+                const r = evaluate(m?.actual, tgt, bands);
                 return (
                   <ValueCells
                     key={p.id}
-                    target={fmtValue(m?.target, ind.unit)}
+                    target={fmtValue(tgt, ind.unit)}
                     actual={fmtValue(m?.actual, ind.unit)}
                     pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
                     bg={r.bg}
@@ -640,6 +683,7 @@ function IndicatorModal({
   periods,
   mMap,
   bands,
+  refData,
   onClose,
 }: {
   indicator: Indicator & { num: number };
@@ -647,6 +691,7 @@ function IndicatorModal({
   periods: Period[];
   mMap: Map<string, Measurement>;
   bands: Band[];
+  refData: RefData;
   onClose: () => void;
 }) {
   return (
@@ -689,11 +734,12 @@ function IndicatorModal({
                   <td className="ind-col">{s.name}</td>
                   {periods.map((p) => {
                     const m = mMap.get(mkey(s.id, indicator.id, p.id));
-                    const r = evaluate(m?.actual, m?.target, bands);
+                    const tgt = tgtEff(refData, tkey(s.id, indicator.id), periodQuarter(p) ?? 1);
+                    const r = evaluate(m?.actual, tgt, bands);
                     return (
                       <ValueCells
                         key={p.id}
-                        target={fmtValue(m?.target, indicator.unit)}
+                        target={fmtValue(tgt, indicator.unit)}
                         actual={fmtValue(m?.actual, indicator.unit)}
                         pct={r.achievement != null ? `${Math.round(r.achievement)}%` : "—"}
                         bg={r.bg}
@@ -778,10 +824,15 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
   );
   // ترتيب الأسبوع المختار زمنيًا (حتى لو لم يُنشأ له سجل بعد)
   const curOrder = Math.floor(new Date(week.weekStart + "T00:00:00Z").getTime() / 86400000);
+  const selQ = quarterOfDate(week.weekStart); // ربع الأسبوع المختار
+  const quarterly = refData.targetMode === "quarterly";
 
   // جهات هذا الأسبوع + التراكمي حتى الآن لكل (قطاع×مؤشر)
   const indRows = useMemo(() => {
-    const weeksUpTo = periodsSorted.filter((p) => p.order <= curOrder);
+    // في الوضع الربعي: التراكمي ضمن نفس الربع فقط؛ وإلا كل الأسابيع حتى الآن
+    const weeksUpTo = periodsSorted.filter(
+      (p) => p.order <= curOrder && (!quarterly || (p.weekStart && quarterOfDate(p.weekStart) === selQ))
+    );
     const cumOf = (sId: string, iId: string) =>
       weeksUpTo.reduce((t, p) => {
         const a = mMap.get(mkey(sId, iId, p.id))?.actual;
@@ -789,9 +840,9 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       }, 0);
     return indicators.map((ind, i) => {
       const perSector = sectors.map((s) => {
-        const target = refData.targets[tkey(s.id, ind.id)] ?? null;
+        const target = tgtEff(refData, tkey(s.id, ind.id), selQ); // مستهدف الربع أو السنوي
         const week = mMap.get(mkey(s.id, ind.id, periodId))?.actual ?? null; // جهات هذا الأسبوع
-        const cum = cumOf(s.id, ind.id); // التراكمي حتى الآن
+        const cum = cumOf(s.id, ind.id); // التراكمي حتى الآن (ضمن الربع في الوضع الربعي)
         const band = target && target > 0 ? bandOf((cum / target) * 100, bands) : null;
         return { sector: s, week, cum, target, band };
       });
@@ -802,7 +853,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       return { ind, num: i + 1, perSector, weekSum, cumSum, tgtSum, rowBand };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indicators, sectors, periodId, curOrder, mMap, bands, refData.targets, periodsSorted]);
+  }, [indicators, sectors, periodId, curOrder, mMap, bands, refData.targets, refData.targetMode, periodsSorted, selQ, quarterly]);
 
   // عدّ الخلايا حسب الحالة (التقدّم التراكمي)
   const bandCounts: Record<string, number> = {};
@@ -847,12 +898,13 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
             indicators
               .map((ind) => {
                 const m = mMap.get(mkey(s.id, ind.id, p.id));
-                const r = evaluate(m?.actual, m?.target, bands);
+                const tgt = tgtEff(refData, tkey(s.id, ind.id), periodQuarter(p) ?? 1);
+                const r = evaluate(m?.actual, tgt, bands);
                 return `<tr>
                   <td>${esc(s.name)}</td>
                   <td>${esc(ind.name)}</td>
                   <td class="c">${ind.unit === "percent" ? "نسبة" : "عدد"}</td>
-                  <td class="c">${m?.target != null ? m.target : "—"}</td>
+                  <td class="c">${tgt != null ? tgt : "—"}</td>
                   <td class="c">${m?.actual != null ? m.actual : "—"}</td>
                   <td class="c">${r.achievement != null ? Math.round(r.achievement) + "%" : "—"}</td>
                   <td class="c" style="background:${r.bg};color:${r.color}">${r.label}</td>
@@ -897,13 +949,14 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
       for (const ind of indicators)
         for (const p of refData.periods) {
           const m = mMap.get(mkey(s.id, ind.id, p.id));
-          const r = evaluate(m?.actual, m?.target, bands);
+          const tgt = tgtEff(refData, tkey(s.id, ind.id), periodQuarter(p) ?? 1);
+          const r = evaluate(m?.actual, tgt, bands);
           rows.push([
             s.name,
             ind.name,
             ind.unit === "percent" ? "نسبة" : "عدد",
             p.label,
-            m?.target != null ? String(m.target) : "",
+            tgt != null ? String(tgt) : "",
             m?.actual != null ? String(m.actual) : "",
             r.achievement != null ? String(Math.round(r.achievement)) : "",
             r.label,
@@ -961,7 +1014,7 @@ function WeeklyReview({ me, refData }: { me: Me; refData: RefData }) {
           <div className="v" style={{ color: "#a78bfa" }} dir="ltr">
             {fmtNum(cumTotal)} / {fmtNum(tgtTotal)}
           </div>
-          <div className="l">التراكمي / المستهدف السنوي</div>
+          <div className="l">{quarterly ? "التراكمي / مستهدف الربع" : "التراكمي / المستهدف السنوي"}</div>
         </div>
         {bands.map((b) => (
           <div className="kpi" key={b.label}>
@@ -1077,7 +1130,8 @@ function DataEntry({ me, refData, reload }: { me: Me; refData: RefData; reload: 
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const targetOf = (indId: string): number | null => refData.targets[tkey(sectorId, indId)] ?? null;
+  const entryQ = quarterOfDate(week.weekStart);
+  const targetOf = (indId: string): number | null => tgtEff(refData, tkey(sectorId, indId), entryQ);
 
   const loadVals = useCallback(async () => {
     if (!sectorId || !periodId) {
@@ -1269,33 +1323,62 @@ function EntrySection({ me, refData, reload }: { me: Me; refData: RefData; reloa
   );
 }
 
-/* ============ المستهدفات السنوية ============ */
+/* ============ المستهدفات (سنوي / ربعي) ============ */
+const QUARTER_LABELS = ["ر1", "ر2", "ر3", "ر4"];
 function TargetsManager({ refData, reload }: { refData: RefData; reload: () => void }) {
   const sectors = refData.sectors;
   const indicators = refData.indicators;
-  const [vals, setVals] = useState<Record<string, string>>(() => {
+  const [mode, setMode] = useState<"annual" | "quarterly">(refData.targetMode);
+  // القيم السنوية
+  const [aVals, setAVals] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    for (const [k, v] of Object.entries(refData.targets || {})) init[k] = String(v);
+    for (const [k, v] of Object.entries(refData.targets || {})) {
+      init[k] = Array.isArray(v) ? String(v.reduce((a, b) => a + (Number(b) || 0), 0)) : String(v);
+    }
+    return init;
+  });
+  // القيم الربعية [ر1..ر4]
+  const [qVals, setQVals] = useState<Record<string, string[]>>(() => {
+    const init: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(refData.targets || {})) {
+      init[k] = Array.isArray(v) ? v.map((x) => String(x)) : [String(v), "", "", ""];
+    }
     return init;
   });
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function setVal(sectorId: string, indId: string, v: string) {
-    setVals((s) => ({ ...s, [tkey(sectorId, indId)]: v }));
-  }
+  const setA = (key: string, v: string) => setAVals((s) => ({ ...s, [key]: v }));
+  const setQ = (key: string, qi: number, v: string) =>
+    setQVals((s) => {
+      const cur = s[key] ? [...s[key]] : ["", "", "", ""];
+      cur[qi] = v;
+      return { ...s, [key]: cur };
+    });
 
   async function save() {
     setMsg("");
     setErr("");
     setLoading(true);
     try {
-      const targets: Record<string, number> = {};
-      for (const [k, v] of Object.entries(vals)) {
-        const n = Number(v);
-        if (v !== "" && Number.isFinite(n) && n >= 0) targets[k] = n;
-      }
+      const targets: Record<string, number | number[]> = {};
+      for (const s of sectors)
+        for (const ind of indicators) {
+          const key = tkey(s.id, ind.id);
+          if (mode === "annual") {
+            const n = Number(aVals[key]);
+            if (aVals[key] && Number.isFinite(n) && n > 0) targets[key] = n;
+          } else {
+            const arr = (qVals[key] || ["", "", "", ""]).map((x) => Number(x) || 0);
+            if (arr.some((x) => x > 0)) targets[key] = arr;
+          }
+        }
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetMode: mode }),
+      });
       const res = await fetch("/api/targets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1304,7 +1387,7 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
       const d = await res.json();
       if (!res.ok) setErr(d.error || "تعذّر الحفظ");
       else {
-        setMsg("تم حفظ المستهدفات ✓ (تُطبّق على كل الأسابيع)");
+        setMsg("تم حفظ المستهدفات ✓");
         reload();
       }
     } finally {
@@ -1317,44 +1400,96 @@ function TargetsManager({ refData, reload }: { refData: RefData; reload: () => v
   }
 
   return (
-    <div className="card" style={{ overflowX: "auto" }}>
-      <h2 className="section-title">المستهدفات السنوية (عدد الجهات لكل قطاع × مؤشر)</h2>
-      <p className="muted" style={{ marginTop: -8, marginBottom: 14 }}>
-        تُدخل مرة واحدة وتبقى ثابتة طوال السنة. المنجز يُحدّث أسبوعيًا من تبويب «إدخال المنجز».
+    <div className="card">
+      <h2 className="section-title">المستهدفات (عدد الجهات لكل قطاع × مؤشر)</h2>
+      <p className="muted" style={{ marginTop: -8, marginBottom: 12 }}>
+        اختر نوع المستهدف: <strong>سنوي</strong> (رقم واحد للسنة) أو <strong>ربعي</strong> (رقم لكل ربع).
       </p>
+      <div className="mode-toggle" style={{ marginBottom: 14 }}>
+        <button className={mode === "annual" ? "on" : ""} onClick={() => setMode("annual")}>
+          سنوي
+        </button>
+        <button className={mode === "quarterly" ? "on" : ""} onClick={() => setMode("quarterly")}>
+          ربعي
+        </button>
+      </div>
       {err && <div className="alert alert-error">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
-      <table className="matrix">
-        <thead>
-          <tr>
-            <th style={{ textAlign: "right", minWidth: 220 }}>المؤشر</th>
-            {sectors.map((s) => (
-              <th key={s.id}>{s.name}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {indicators.map((ind, i) => (
-            <tr key={ind.id}>
-              <td style={{ textAlign: "right" }}>
-                <span className="muted">م{i + 1}.</span> {ind.name}
-              </td>
-              {sectors.map((s) => (
-                <td key={s.id}>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    style={{ width: 80, textAlign: "center" }}
-                    value={vals[tkey(s.id, ind.id)] ?? ""}
-                    onChange={(e) => setVal(s.id, ind.id, e.target.value)}
-                  />
-                </td>
+
+      {mode === "annual" ? (
+        <div style={{ overflowX: "auto" }}>
+          <table className="matrix">
+            <thead>
+              <tr>
+                <th style={{ textAlign: "right", minWidth: 200 }}>المؤشر</th>
+                {sectors.map((s) => (
+                  <th key={s.id}>{s.name}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {indicators.map((ind, i) => (
+                <tr key={ind.id}>
+                  <td style={{ textAlign: "right" }}>
+                    <span className="muted">م{i + 1}.</span> {ind.name}
+                  </td>
+                  {sectors.map((s) => (
+                    <td key={s.id}>
+                      <input
+                        type="number"
+                        min="0"
+                        style={{ width: 80, textAlign: "center" }}
+                        value={aVals[tkey(s.id, ind.id)] ?? ""}
+                        onChange={(e) => setA(tkey(s.id, ind.id), e.target.value)}
+                      />
+                    </td>
+                  ))}
+                </tr>
               ))}
-            </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="q-cards">
+          {indicators.map((ind, i) => (
+            <div className="card" key={ind.id} style={{ overflowX: "auto", marginBottom: 12 }}>
+              <div className="ec-title" style={{ minHeight: "auto", marginBottom: 8 }}>
+                <span className="ec-num">م{i + 1}</span>
+                {ind.name}
+              </div>
+              <table className="matrix">
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "right", minWidth: 140 }}>القطاع</th>
+                    {QUARTER_LABELS.map((q) => (
+                      <th key={q}>{q}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sectors.map((s) => (
+                    <tr key={s.id}>
+                      <td style={{ textAlign: "right" }}>{s.name}</td>
+                      {QUARTER_LABELS.map((_, qi) => (
+                        <td key={qi}>
+                          <input
+                            type="number"
+                            min="0"
+                            style={{ width: 64, textAlign: "center" }}
+                            value={(qVals[tkey(s.id, ind.id)] || [])[qi] ?? ""}
+                            onChange={(e) => setQ(tkey(s.id, ind.id), qi, e.target.value)}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ))}
-        </tbody>
-      </table>
+        </div>
+      )}
+
       <div style={{ marginTop: 16 }}>
         <button className="btn" onClick={save} disabled={loading}>
           {loading ? "جارٍ الحفظ..." : "حفظ المستهدفات"}

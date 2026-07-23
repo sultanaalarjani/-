@@ -79,8 +79,11 @@ export interface StatusBand {
   from: number;
 }
 
+export type TargetMode = "annual" | "quarterly";
+
 export interface Settings {
   statuses: StatusBand[];
+  targetMode: TargetMode;
 }
 
 const DEFAULT_STATUS_BANDS: StatusBand[] = [
@@ -98,8 +101,8 @@ interface DBShape {
   periods: Period[];
   measurements: Measurement[];
   settings: Settings;
-  // المستهدفات السنوية الثابتة لكل (قطاع|مؤشر) = عدد الجهات
-  targets: Record<string, number>;
+  // المستهدفات لكل (قطاع|مؤشر): رقم واحد (سنوي) أو مصفوفة [ربع1..ربع4]
+  targets: Record<string, number | number[]>;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -114,7 +117,7 @@ function defaultDB(): DBShape {
     indicators: [],
     periods: [],
     measurements: [],
-    settings: { statuses: DEFAULT_STATUS_BANDS },
+    settings: { statuses: DEFAULT_STATUS_BANDS, targetMode: "annual" },
     targets: {},
   };
 }
@@ -461,41 +464,28 @@ export async function saveIndicators(items: IndicatorInput[]): Promise<Indicator
   return db.indicators;
 }
 
-// ===== المستهدفات السنوية الثابتة =====
-export async function getTargets(): Promise<Record<string, number>> {
+// ===== المستهدفات (سنوي أو ربعي) =====
+export async function getTargets(): Promise<Record<string, number | number[]>> {
   return (await getDB()).targets || {};
 }
 
-// حفظ المستهدفات السنوية ونشرها على قياسات كل الأسابيع (المنجز/actual يبقى كما هو)
-export async function saveTargets(map: Record<string, number>): Promise<Record<string, number>> {
+// حفظ المستهدفات (سنوي: رقم · ربعي: مصفوفة 4 قيم)
+export async function saveTargets(
+  map: Record<string, number | number[]>
+): Promise<Record<string, number | number[]>> {
   const db = await getDB();
-  const clean: Record<string, number> = {};
+  const clean: Record<string, number | number[]> = {};
   for (const [k, v] of Object.entries(map || {})) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) clean[k] = n;
-  }
-  db.targets = clean;
-  for (const p of db.periods) {
-    for (const [key, val] of Object.entries(clean)) {
-      const [sectorId, indicatorId] = key.split("|");
-      if (!sectorId || !indicatorId) continue;
-      const m = db.measurements.find(
-        (x) => x.sectorId === sectorId && x.indicatorId === indicatorId && x.periodId === p.id
-      );
-      if (m) m.target = val;
-      else
-        db.measurements.push({
-          id: newId(),
-          sectorId,
-          indicatorId,
-          periodId: p.id,
-          target: val,
-          actual: null,
-          updatedBy: "system",
-          updatedAt: new Date().toISOString(),
-        });
+    if (Array.isArray(v)) {
+      const arr = v.slice(0, 4).map((x) => (Number.isFinite(Number(x)) ? Math.max(0, Number(x)) : 0));
+      while (arr.length < 4) arr.push(0);
+      if (arr.some((x) => x > 0)) clean[k] = arr;
+    } else {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0) clean[k] = n;
     }
   }
+  db.targets = clean;
   await save(db);
   return db.targets;
 }
@@ -518,21 +508,6 @@ export async function createPeriod(label: string, weekStart?: string): Promise<P
     : db.periods.length + 1;
   const period: Period = { id: newId(), label: label.trim(), order, weekStart };
   db.periods.push(period);
-  // تعبئة المستهدفات السنوية الثابتة لهذا الأسبوع الجديد (المنجز يبقى فارغًا)
-  for (const [key, val] of Object.entries(db.targets || {})) {
-    const [sectorId, indicatorId] = key.split("|");
-    if (!sectorId || !indicatorId) continue;
-    db.measurements.push({
-      id: newId(),
-      sectorId,
-      indicatorId,
-      periodId: period.id,
-      target: val,
-      actual: null,
-      updatedBy: "system",
-      updatedAt: new Date().toISOString(),
-    });
-  }
   await save(db);
   return period;
 }
@@ -603,16 +578,17 @@ export async function upsertMeasurement(input: {
   return m;
 }
 
-// ===== الإعدادات (حالات الأداء) =====
+// ===== الإعدادات (حالات الأداء + وضع المستهدف) =====
 export async function getSettings(): Promise<Settings> {
   const s = (await getDB()).settings as unknown as {
     statuses?: StatusBand[];
+    targetMode?: TargetMode;
     goodThreshold?: number;
     excellentThreshold?: number;
   };
-  // توافق مع الإعداد القديم (goodThreshold/excellentThreshold)
+  const targetMode: TargetMode = s?.targetMode === "quarterly" ? "quarterly" : "annual";
   if (s && Array.isArray(s.statuses) && s.statuses.length) {
-    return { statuses: s.statuses };
+    return { statuses: s.statuses, targetMode };
   }
   if (s && typeof s.goodThreshold === "number") {
     return {
@@ -621,24 +597,34 @@ export async function getSettings(): Promise<Settings> {
         { label: "متعثر جزئيًا", color: "#f59e0b", from: s.goodThreshold },
         { label: "وفق المسار", color: "#22c55e", from: s.excellentThreshold ?? 100 },
       ],
+      targetMode,
     };
   }
-  return { statuses: DEFAULT_STATUS_BANDS };
+  return { statuses: DEFAULT_STATUS_BANDS, targetMode };
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
   const db = await getDB();
+  const cur: Settings = {
+    statuses: db.settings?.statuses?.length ? db.settings.statuses : DEFAULT_STATUS_BANDS,
+    targetMode: db.settings?.targetMode === "quarterly" ? "quarterly" : "annual",
+  };
   if (Array.isArray(patch.statuses)) {
-    const clean = patch.statuses
-      .filter((b) => b && typeof b.label === "string" && b.label.trim())
-      .map((b) => ({
-        label: String(b.label).trim(),
-        color: /^#[0-9a-fA-F]{3,8}$/.test(b.color) ? b.color : "#64748b",
-        from: Number.isFinite(Number(b.from)) ? Math.max(0, Number(b.from)) : 0,
-      }))
-      .sort((a, b) => a.from - b.from);
-    db.settings = { statuses: clean.length ? clean : DEFAULT_STATUS_BANDS };
+    cur.statuses =
+      patch.statuses
+        .filter((b) => b && typeof b.label === "string" && b.label.trim())
+        .map((b) => ({
+          label: String(b.label).trim(),
+          color: /^#[0-9a-fA-F]{3,8}$/.test(b.color) ? b.color : "#64748b",
+          from: Number.isFinite(Number(b.from)) ? Math.max(0, Number(b.from)) : 0,
+        }))
+        .sort((a, b) => a.from - b.from) || DEFAULT_STATUS_BANDS;
+    if (cur.statuses.length === 0) cur.statuses = DEFAULT_STATUS_BANDS;
   }
+  if (patch.targetMode === "annual" || patch.targetMode === "quarterly") {
+    cur.targetMode = patch.targetMode;
+  }
+  db.settings = cur;
   await save(db);
   return db.settings;
 }

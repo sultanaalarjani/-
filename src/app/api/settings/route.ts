@@ -13,10 +13,15 @@ export async function PUT(req: Request) {
   if (!user || user.role !== "admin") {
     return NextResponse.json({ error: "غير مصرّح" }, { status: 403 });
   }
-  const { statuses } = await req.json().catch(() => ({}));
-  if (!Array.isArray(statuses) || statuses.length === 0) {
-    return NextResponse.json({ error: "أضف حالة واحدة على الأقل" }, { status: 400 });
+  const { statuses, targetMode } = await req.json().catch(() => ({}));
+  const patch: { statuses?: unknown[]; targetMode?: "annual" | "quarterly" } = {};
+  if (Array.isArray(statuses)) {
+    if (statuses.length === 0) {
+      return NextResponse.json({ error: "أضف حالة واحدة على الأقل" }, { status: 400 });
+    }
+    patch.statuses = statuses;
   }
-  const settings = await updateSettings({ statuses });
+  if (targetMode === "annual" || targetMode === "quarterly") patch.targetMode = targetMode;
+  const settings = await updateSettings(patch as never);
   return NextResponse.json({ ok: true, settings });
 }

@@ -17,6 +17,6 @@ export async function PUT(req: Request) {
   if (!targets || typeof targets !== "object") {
     return NextResponse.json({ error: "بيانات غير صحيحة" }, { status: 400 });
   }
-  const saved = await saveTargets(targets as Record<string, number>);
+  const saved = await saveTargets(targets as Record<string, number | number[]>);
   return NextResponse.json({ ok: true, targets: saved });
 }
